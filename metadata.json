@@ -1,0 +1,6 @@
+{
+  "name": "Arume Coffee API",
+  "description": "Cloudflare Workers Backend API for Arume Coffee with Hono, Supabase, and Midtrans integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
