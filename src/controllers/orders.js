@@ -3,33 +3,21 @@ import { getProductsByIds } from './products.js';
 import { createSnapTransaction } from '../config/payment.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
-// In-memory runtime cache for orders when DB is not yet connected
 const inMemoryOrdersMap = new Map();
 
-/**
- * POST /api/orders
- * Creates a new order with mandatory server-side price validation from database
- */
 export const createOrder = async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const { customer, items, notes } = body;
 
-    // 1. Input Validation
     if (!customer || !customer.name || (!customer.email && !customer.phone)) {
-      return errorResponse(
-        c,
-        'Invalid customer information',
-        'Customer name and at least email or phone are required',
-        400
-      );
+      return errorResponse(c, 'Invalid customer information', 'Customer name and at least email or phone are required', 400);
     }
 
     if (!Array.isArray(items) || items.length === 0) {
       return errorResponse(c, 'Invalid items', 'Order must contain at least one product item', 400);
     }
 
-    // 2. Validate requested products from Database (NEVER trust frontend price)
     const productIds = Array.from(new Set(items.map(i => i.product_id || i.id).filter(Boolean)));
     if (productIds.length === 0) {
       return errorResponse(c, 'Invalid product IDs', 'Product IDs missing in items payload', 400);
@@ -62,7 +50,6 @@ export const createOrder = async (c) => {
         return errorResponse(c, 'Insufficient stock', `Insufficient stock for '${dbProduct.name}'. Available: ${dbProduct.stock}`, 400);
       }
 
-      // CRITICAL SECURITY RULE: Calculate price strictly from Database record
       const unitPrice = parseFloat(dbProduct.price);
       const subtotal = unitPrice * quantity;
       calculatedTotalAmount += subtotal;
@@ -70,21 +57,18 @@ export const createOrder = async (c) => {
       validatedOrderItems.push({
         product_id: dbProduct.id,
         product_name: dbProduct.name,
-        price: unitPrice, // Official DB price
+        price: unitPrice,
         quantity: quantity,
         subtotal: subtotal
       });
     }
 
-    // 3. Generate Unique Order Number
     const orderNumber = `ARC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const supabase = getSupabaseClient(c.env);
 
     let createdOrderRecord = null;
 
-    // 4. Persist to Supabase if configured
     if (supabase) {
-      // Upsert/Insert Customer
       try {
         await supabase
           .from('customers')
@@ -94,11 +78,9 @@ export const createOrder = async (c) => {
             phone: customer.phone || null
           });
       } catch (custErr) {
-        // Non-blocking customer insert
         console.warn('Customer record insert warning:', custErr);
       }
 
-      // Insert Order
       const { data: orderData, error: orderErr } = await supabase
         .from('orders')
         .insert({
@@ -116,7 +98,6 @@ export const createOrder = async (c) => {
       if (!orderErr && orderData) {
         createdOrderRecord = orderData;
 
-        // Insert Order Items
         const orderItemsPayload = validatedOrderItems.map(item => ({
           order_id: orderData.id,
           order_number: orderNumber,
@@ -137,9 +118,8 @@ export const createOrder = async (c) => {
       } else {
         console.error('Supabase order insert error:', orderErr);
       }
-    } // <-- PERBAIKAN: Kurung tutup untuk "if (supabase)" di sini
+    }
 
-    // 5. Generate Payment Token (Midtrans or Mock Mode)
     const paymentResult = await createSnapTransaction(c.env, {
       orderNumber,
       grossAmount: calculatedTotalAmount,
@@ -147,7 +127,6 @@ export const createOrder = async (c) => {
       items: validatedOrderItems
     });
 
-    // Update snap_token / payment_url if order created in Supabase
     if (supabase && createdOrderRecord) {
       await supabase
         .from('orders')
@@ -158,7 +137,6 @@ export const createOrder = async (c) => {
         .eq('id', createdOrderRecord.id);
     }
 
-    // Construct response object
     const finalOrderResponse = {
       order_number: orderNumber,
       total_amount: calculatedTotalAmount,
@@ -174,7 +152,6 @@ export const createOrder = async (c) => {
       created_at: new Date().toISOString()
     };
 
-    // Keep copy in runtime memory for fallback queries
     inMemoryOrdersMap.set(orderNumber, finalOrderResponse);
 
     return successResponse(c, finalOrderResponse, 'Order created successfully', 201);
@@ -183,10 +160,6 @@ export const createOrder = async (c) => {
   }
 };
 
-/**
- * GET /api/orders/:orderNumber
- * Retrieves order status and item details by order number
- */
 export const getOrderByNumber = async (c) => {
   try {
     const orderNumber = c.req.param('orderNumber');
@@ -204,13 +177,11 @@ export const getOrderByNumber = async (c) => {
         .single();
 
       if (!orderErr && order) {
-        // Fetch order items
         const { data: items } = await supabase
           .from('order_items')
           .select('*')
           .eq('order_number', orderNumber);
 
-        // Fetch payment record
         const { data: payments } = await supabase
           .from('payments')
           .select('*')
@@ -225,7 +196,6 @@ export const getOrderByNumber = async (c) => {
       }
     }
 
-    // Fallback to runtime in-memory map
     if (inMemoryOrdersMap.has(orderNumber)) {
       return successResponse(c, inMemoryOrdersMap.get(orderNumber), 'Order details retrieved successfully (Runtime)');
     }
@@ -236,9 +206,6 @@ export const getOrderByNumber = async (c) => {
   }
 };
 
-/**
- * Internal helper to update order status by order number
- */
 export const updateOrderStatus = async (env, orderNumber, newStatus, paymentDetails = {}) => {
   const supabase = getSupabaseClient(env);
 
