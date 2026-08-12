@@ -117,27 +117,27 @@ export const createOrder = async (c) => {
         createdOrderRecord = orderData;
 
         // Insert Order Items
-const orderItemsPayload = validatedOrderItems.map(item => ({
-  order_id: orderData.id,
-  order_number: orderNumber,
-  product_id: item.product_id,
-  product_name: item.product_name,
-  price: item.price,
-  quantity: item.quantity,
-  subtotal: item.subtotal
-}));
+        const orderItemsPayload = validatedOrderItems.map(item => ({
+          order_id: orderData.id,
+          order_number: orderNumber,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          price: item.price,
+          quantity: item.quantity,
+          subtotal: item.subtotal
+        }));
 
-const { error: orderItemsError } = await supabase
-  .from('order_items')
-  .insert(orderItemsPayload);
+        const { error: orderItemsError } = await supabase
+          .from('order_items')
+          .insert(orderItemsPayload);
 
-if (orderItemsError) {
-  console.error('Order items insert error:', orderItemsError);
-  throw new Error(`Failed to save order items: ${orderItemsError.message}`);
-}
-} else {
-  console.error('Supabase order insert error:', orderErr);
-}
+        if (orderItemsError) {
+          console.error('Order items insert error:', orderItemsError);
+        }
+      } else {
+        console.error('Supabase order insert error:', orderErr);
+      }
+    } // <-- PERBAIKAN: Kurung tutup untuk "if (supabase)" di sini
 
     // 5. Generate Payment Token (Midtrans or Mock Mode)
     const paymentResult = await createSnapTransaction(c.env, {
@@ -179,7 +179,7 @@ if (orderItemsError) {
 
     return successResponse(c, finalOrderResponse, 'Order created successfully', 201);
   } catch (err) {
-    return errorResponse(c, 'Failed to create order', err, 500);
+    return errorResponse(c, 'Failed to create order', err.message || err, 500);
   }
 };
 
@@ -232,7 +232,7 @@ export const getOrderByNumber = async (c) => {
 
     return errorResponse(c, 'Order not found', `No order found with order number ${orderNumber}`, 404);
   } catch (err) {
-    return errorResponse(c, 'Failed to fetch order details', err, 500);
+    return errorResponse(c, 'Failed to fetch order details', err.message || err, 500);
   }
 };
 
