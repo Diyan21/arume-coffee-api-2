@@ -7,24 +7,38 @@ import { createPayment, handlePaymentCallback, checkPaymentStatus } from './cont
 
 const app = new Hono();
 
-// CORS Middleware for Cloudflare Workers
+// CORS Middleware untuk Cloudflare Workers
 app.use('*', async (c, next) => {
-  const frontendUrl = c.env?.FRONTEND_URL || (typeof process !== 'undefined' ? process.env?.FRONTEND_URL : undefined);
+  const envFrontendUrl = c.env?.FRONTEND_URL || (typeof process !== 'undefined' ? process.env?.FRONTEND_URL : undefined);
 
   const corsHandler = cors({
     origin: (origin) => {
+      // 1. Request tanpa origin (misal dari server-to-server / Postman)
       if (!origin) return '*';
-      if (frontendUrl && frontendUrl.trim() !== '' && frontendUrl !== '*') {
-        if (
-          origin === frontendUrl ||
-          origin.endsWith('.netlify.app') ||
-          origin.includes('localhost') ||
-          origin.includes('127.0.0.1')
-        ) {
-          return origin;
-        }
-        return frontendUrl;
+
+      // 2. Daftar origin yang selalu diizinkan
+      const allowedOrigins = [
+        'https://arumeproject2.netlify.app',
+        'https://arume-coffee.netlify.app',
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://127.0.0.1:5173'
+      ];
+
+      if (envFrontendUrl && envFrontendUrl.trim() !== '') {
+        allowedOrigins.push(envFrontendUrl.trim());
       }
+
+      // 3. Pengecekan origin (Whitelist eksplisit atau Subdomain Netlify)
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.netlify.app') ||
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1')
+      ) {
+        return origin;
+      }
+
       return origin;
     },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -41,7 +55,7 @@ app.use('*', async (c, next) => {
 app.get('/', (c) => {
   const acceptHeader = c.req.header('accept') || '';
   
-  // Return JSON if explicitly requested by API clients
+  // Return JSON jika di-request via API Client
   if (acceptHeader.includes('application/json') && !acceptHeader.includes('text/html')) {
     return c.json({
       service: 'Arume Coffee API',
@@ -54,7 +68,7 @@ app.get('/', (c) => {
 
   const isMidtransConfigured = Boolean(c.env?.MIDTRANS_SERVER_KEY && c.env.MIDTRANS_SERVER_KEY.trim().length > 0);
   const isSupabaseConfigured = Boolean(c.env?.SUPABASE_URL && c.env?.SUPABASE_SERVICE_ROLE_KEY);
-  const frontendUrl = c.env?.FRONTEND_URL || 'https://arume-coffee.netlify.app';
+  const frontendUrl = c.env?.FRONTEND_URL || 'https://arumeproject2.netlify.app';
 
   const htmlContent = `<!doctype html>
 <html lang="en" class="h-full">
@@ -81,7 +95,7 @@ app.get('/', (c) => {
           <div class="w-2.5 h-2.5 rounded-full bg-green-600 animate-pulse"></div>
           <span class="uppercase font-bold tracking-widest">Status: Live</span>
         </div>
-        <div class="hidden md:block uppercase font-bold tracking-widest opacity-50 font-mono" id="utc-time">2026-08-10 UTC</div>
+        <div class="hidden md:block uppercase font-bold tracking-widest opacity-50 font-mono" id="utc-time">2026-08-12 UTC</div>
       </div>
     </header>
 
@@ -278,7 +292,7 @@ app.get('/', (c) => {
       <div class="flex flex-wrap gap-4 font-bold">
         <span class="text-green-400">DB_CONN: ${isSupabaseConfigured ? 'OK (SUPABASE)' : 'FALLBACK_MEMORY'}</span>
         <span class="text-yellow-400">GATEWAY: ${isMidtransConfigured ? 'MIDTRANS_SNAP' : 'MOCK_MODE'}</span>
-        <span class="text-blue-400">CORS: RESTRICTED</span>
+        <span class="text-blue-400">CORS: PERMISSIVE_NETLIFY</span>
       </div>
       <div class="opacity-60 italic">arume-coffee-api v1.0.0 // Cloudflare Workers</div>
     </footer>
@@ -353,7 +367,6 @@ app.get('/', (c) => {
       const status = document.getElementById('response-status');
       status.textContent = 'POST /api/payment/create...';
 
-      // Create dummy order first or use test number
       const payload = { order_number: "ARC-SAMPLE-TEST" };
 
       try {
