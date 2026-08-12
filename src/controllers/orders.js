@@ -117,21 +117,27 @@ export const createOrder = async (c) => {
         createdOrderRecord = orderData;
 
         // Insert Order Items
-        const orderItemsPayload = validatedOrderItems.map(item => ({
-          order_id: orderData.id,
-          order_number: orderNumber,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          price: item.price,
-          quantity: item.quantity,
-          subtotal: item.subtotal
-        }));
+const orderItemsPayload = validatedOrderItems.map(item => ({
+  order_id: orderData.id,
+  order_number: orderNumber,
+  product_id: item.product_id,
+  product_name: item.product_name,
+  price: item.price,
+  quantity: item.quantity,
+  subtotal: item.subtotal
+}));
 
-        await supabase.from('order_items').insert(orderItemsPayload);
-      } else {
-        console.error('Supabase order insert error:', orderErr);
-      }
-    }
+const { error: orderItemsError } = await supabase
+  .from('order_items')
+  .insert(orderItemsPayload);
+
+if (orderItemsError) {
+  console.error('Order items insert error:', orderItemsError);
+  throw new Error(`Failed to save order items: ${orderItemsError.message}`);
+}
+} else {
+  console.error('Supabase order insert error:', orderErr);
+}
 
     // 5. Generate Payment Token (Midtrans or Mock Mode)
     const paymentResult = await createSnapTransaction(c.env, {
