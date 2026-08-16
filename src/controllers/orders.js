@@ -26,7 +26,6 @@ const PRODUCT_ID_ALIASES = {
   'arumeya-americano': 'prod-05',
 };
 
-
 /**
  * Normalize Product ID
  */
@@ -38,7 +37,6 @@ const normalizeProductId = (id) => {
     rawId
   );
 };
-
 
 /**
  * ======================================================
@@ -116,7 +114,6 @@ const getExistingOrderResponse = async (
   };
 };
 
-
 /**
  * ======================================================
  * POST /api/orders
@@ -138,7 +135,6 @@ export const createOrder = async (c) => {
       checkout_id
     } = body;
 
-
     /**
      * ==================================================
      * 1. VALIDATE CHECKOUT ID
@@ -152,7 +148,6 @@ export const createOrder = async (c) => {
         400
       );
     }
-
 
     /**
      * ==================================================
@@ -175,7 +170,6 @@ export const createOrder = async (c) => {
       );
     }
 
-
     /**
      * ==================================================
      * 3. VALIDATE ITEMS
@@ -192,7 +186,6 @@ export const createOrder = async (c) => {
         400
       );
     }
-
 
     /**
      * ==================================================
@@ -212,7 +205,6 @@ export const createOrder = async (c) => {
         503
       );
     }
-
 
     /**
      * ==================================================
@@ -253,7 +245,6 @@ export const createOrder = async (c) => {
       );
     }
 
-
     /**
      * ==================================================
      * 6. NORMALIZE PRODUCT IDs
@@ -272,7 +263,6 @@ export const createOrder = async (c) => {
             .filter(Boolean)
         )
       );
-
 
     /**
      * ==================================================
@@ -295,7 +285,6 @@ export const createOrder = async (c) => {
         )
       );
 
-
     /**
      * ==================================================
      * 8. VALIDATE PRODUCT DATA
@@ -306,7 +295,6 @@ export const createOrder = async (c) => {
     const validatedOrderItems = [];
 
     for (const item of items) {
-
       const pid =
         normalizeProductId(
           item.product_id ||
@@ -319,7 +307,6 @@ export const createOrder = async (c) => {
           10
         );
 
-
       // Product ID required
       if (!pid) {
         return errorResponse(
@@ -329,7 +316,6 @@ export const createOrder = async (c) => {
           400
         );
       }
-
 
       // Quantity validation
       if (
@@ -344,7 +330,6 @@ export const createOrder = async (c) => {
         );
       }
 
-
       // Maximum order quantity
       if (quantity > 100) {
         return errorResponse(
@@ -354,7 +339,6 @@ export const createOrder = async (c) => {
           400
         );
       }
-
 
       /**
        * Product harus benar-benar ada.
@@ -391,7 +375,6 @@ export const createOrder = async (c) => {
         );
       }
 
-
       // Product inactive
       if (
         dbProduct.is_active ===
@@ -404,7 +387,6 @@ export const createOrder = async (c) => {
           400
         );
       }
-
 
       /**
        * STOCK VALIDATION
@@ -421,11 +403,10 @@ export const createOrder = async (c) => {
         return errorResponse(
           c,
           'Maaf, stok menu ini sedang habis.',
-          `Only ${stock} unit(s) available for ${dbProduct.name}`,
+          `Stok ${dbProduct.name} tersedia ${stock}, sedangkan pesanan ${quantity}`,
           400
         );
       }
-
 
       /**
        * PRICE
@@ -452,14 +433,12 @@ export const createOrder = async (c) => {
         );
       }
 
-
       const subtotal =
         unitPrice *
         quantity;
 
       calculatedTotalAmount +=
         subtotal;
-
 
       validatedOrderItems.push({
         product_id:
@@ -479,7 +458,6 @@ export const createOrder = async (c) => {
       });
     }
 
-
     /**
      * ==================================================
      * 9. GENERATE ORDER NUMBER
@@ -490,7 +468,6 @@ export const createOrder = async (c) => {
         1000 +
         Math.random() * 9000
       )}`;
-
 
     /**
      * ==================================================
@@ -523,7 +500,6 @@ export const createOrder = async (c) => {
         customerError
       );
     }
-
 
     /**
      * ==================================================
@@ -571,7 +547,6 @@ export const createOrder = async (c) => {
       .select()
       .single();
 
-
     /**
      * ==================================================
      * ORDER INSERT FAILED
@@ -582,7 +557,6 @@ export const createOrder = async (c) => {
         'ORDER INSERT FAILED:',
         orderError
       );
-
 
       /**
        * Kemungkinan request yang sama
@@ -599,7 +573,6 @@ export const createOrder = async (c) => {
         )
         .maybeSingle();
 
-
       if (duplicateOrder) {
         const duplicateResponse =
           await getExistingOrderResponse(
@@ -615,10 +588,7 @@ export const createOrder = async (c) => {
         );
       }
 
-
       /**
-       * PENTING:
-       *
        * Kalau Supabase gagal,
        * jangan bikin transaksi Midtrans.
        */
@@ -629,7 +599,6 @@ export const createOrder = async (c) => {
         500
       );
     }
-
 
     /**
      * ==================================================
@@ -662,7 +631,6 @@ export const createOrder = async (c) => {
         })
       );
 
-
     const {
       error: orderItemsError
     } = await supabase
@@ -671,14 +639,11 @@ export const createOrder = async (c) => {
         orderItemsPayload
       );
 
-
     if (orderItemsError) {
-
       console.error(
         'ORDER ITEMS INSERT FAILED:',
         orderItemsError
       );
-
 
       await supabase
         .from('orders')
@@ -691,7 +656,6 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
-
       return errorResponse(
         c,
         'Failed to save order items',
@@ -700,22 +664,14 @@ export const createOrder = async (c) => {
       );
     }
 
-
     /**
      * ==================================================
      * 13. CREATE MIDTRANS
      * ==================================================
-     *
-     * Midtrans hanya dibuat setelah:
-     *
-     * orders berhasil
-     * +
-     * order_items berhasil
      */
     let paymentResult;
 
     try {
-
       paymentResult =
         await createSnapTransaction(
           c.env,
@@ -733,12 +689,10 @@ export const createOrder = async (c) => {
         );
 
     } catch (paymentError) {
-
       console.error(
         'MIDTRANS CREATE FAILED:',
         paymentError
       );
-
 
       await supabase
         .from('orders')
@@ -751,7 +705,6 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
-
       return errorResponse(
         c,
         'Order saved but payment failed',
@@ -761,7 +714,6 @@ export const createOrder = async (c) => {
       );
     }
 
-
     /**
      * ==================================================
      * 14. SAVE SNAP TOKEN
@@ -770,7 +722,6 @@ export const createOrder = async (c) => {
     if (
       paymentResult?.token
     ) {
-
       const {
         error: snapUpdateError
       } = await supabase
@@ -787,7 +738,6 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
-
       if (snapUpdateError) {
         console.error(
           'SNAP TOKEN SAVE ERROR:',
@@ -796,14 +746,12 @@ export const createOrder = async (c) => {
       }
     }
 
-
     /**
      * ==================================================
      * 15. FINAL RESPONSE
      * ==================================================
      */
     const finalOrderResponse = {
-
       checkout_id,
 
       order_number:
@@ -816,7 +764,6 @@ export const createOrder = async (c) => {
         'pending',
 
       customer: {
-
         name:
           customer.name,
 
@@ -844,12 +791,10 @@ export const createOrder = async (c) => {
         new Date().toISOString()
     };
 
-
     inMemoryOrdersMap.set(
       orderNumber,
       finalOrderResponse
     );
-
 
     return successResponse(
       c,
@@ -859,12 +804,10 @@ export const createOrder = async (c) => {
     );
 
   } catch (err) {
-
     console.error(
       'Create Order Error:',
       err
     );
-
 
     return errorResponse(
       c,
@@ -876,21 +819,17 @@ export const createOrder = async (c) => {
   }
 };
 
-
 /**
  * ======================================================
  * GET /api/orders/:orderNumber
  * ======================================================
  */
 export const getOrderByNumber = async (c) => {
-
   try {
-
     const orderNumber =
       c.req.param(
         'orderNumber'
       );
-
 
     if (!orderNumber) {
       return errorResponse(
@@ -901,15 +840,12 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
-
     const supabase =
       getSupabaseClient(
         c.env
       );
 
-
     if (supabase) {
-
       const {
         data: order,
         error: orderError
@@ -922,12 +858,10 @@ export const getOrderByNumber = async (c) => {
         )
         .single();
 
-
       if (
         !orderError &&
         order
       ) {
-
         const {
           data: items
         } = await supabase
@@ -937,7 +871,6 @@ export const getOrderByNumber = async (c) => {
             'order_number',
             orderNumber
           );
-
 
         const {
           data: payments
@@ -955,7 +888,6 @@ export const getOrderByNumber = async (c) => {
             }
           );
 
-
         return successResponse(
           c,
           {
@@ -972,16 +904,11 @@ export const getOrderByNumber = async (c) => {
       }
     }
 
-
-    /**
-     * Runtime fallback
-     */
     if (
       inMemoryOrdersMap.has(
         orderNumber
       )
     ) {
-
       return successResponse(
         c,
         inMemoryOrdersMap.get(
@@ -991,7 +918,6 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
-
     return errorResponse(
       c,
       'Order not found',
@@ -1000,7 +926,6 @@ export const getOrderByNumber = async (c) => {
     );
 
   } catch (err) {
-
     return errorResponse(
       c,
       'Failed to fetch order details',
@@ -1010,7 +935,6 @@ export const getOrderByNumber = async (c) => {
     );
   }
 };
-
 
 /**
  * ======================================================
@@ -1023,27 +947,20 @@ export const updateOrderStatus = async (
   newStatus,
   paymentDetails = {}
 ) => {
-
   const supabase =
     getSupabaseClient(
       env
     );
 
-
-  /**
-   * Runtime cache update
-   */
   if (
     inMemoryOrdersMap.has(
       orderNumber
     )
   ) {
-
     const existing =
       inMemoryOrdersMap.get(
         orderNumber
       );
-
 
     inMemoryOrdersMap.set(
       orderNumber,
@@ -1062,12 +979,7 @@ export const updateOrderStatus = async (
     );
   }
 
-
-  /**
-   * Supabase update
-   */
   if (supabase) {
-
     const {
       error
     } = await supabase
@@ -1084,7 +996,6 @@ export const updateOrderStatus = async (
         orderNumber
       );
 
-
     if (error) {
       console.error(
         'UPDATE ORDER STATUS ERROR:',
@@ -1095,7 +1006,6 @@ export const updateOrderStatus = async (
     }
   }
 };
-
 
 /**
  * ======================================================
@@ -1112,19 +1022,16 @@ export const adjustStockForOrder = async (
   orderNumber,
   mode = 'decrease'
 ) => {
-
   const supabase =
     getSupabaseClient(
       env
     );
-
 
   if (!supabase) {
     throw new Error(
       'Supabase unavailable'
     );
   }
-
 
   /**
    * ==================================================
@@ -1148,17 +1055,14 @@ export const adjustStockForOrder = async (
     )
     .single();
 
-
   if (
     orderError ||
     !order
   ) {
-
     throw new Error(
       `Order '${orderNumber}' not found`
     );
   }
-
 
   /**
    * ==================================================
@@ -1170,7 +1074,6 @@ export const adjustStockForOrder = async (
       'decrease' &&
     order.stock_processed
   ) {
-
     return {
       success:
         true,
@@ -1183,7 +1086,6 @@ export const adjustStockForOrder = async (
     };
   }
 
-
   /**
    * ==================================================
    * PREVENT DOUBLE STOCK RESTORE
@@ -1194,7 +1096,6 @@ export const adjustStockForOrder = async (
       'increase' &&
     order.stock_restored
   ) {
-
     return {
       success:
         true,
@@ -1206,7 +1107,6 @@ export const adjustStockForOrder = async (
         'Stock already restored'
     };
   }
-
 
   /**
    * ==================================================
@@ -1226,11 +1126,9 @@ export const adjustStockForOrder = async (
       orderNumber
     );
 
-
   if (itemsError) {
     throw itemsError;
   }
-
 
   /**
    * ==================================================
@@ -1241,12 +1139,10 @@ export const adjustStockForOrder = async (
     const item of
     items || []
   ) {
-
     const productId =
       normalizeProductId(
         item.product_id
       );
-
 
     const {
       data: product,
@@ -1262,53 +1158,43 @@ export const adjustStockForOrder = async (
       )
       .single();
 
-
     if (
       productError ||
       !product
     ) {
-
       throw new Error(
         `Product '${productId}' not found`
       );
     }
-
 
     const qty =
       Number(
         item.quantity
       );
 
-
     if (
       !Number.isFinite(qty) ||
       qty <= 0
     ) {
-
       continue;
     }
-
 
     const currentStock =
       Number(
         product.stock
       );
 
-
     if (
       !Number.isFinite(
         currentStock
       )
     ) {
-
       throw new Error(
         `Invalid stock for '${productId}'`
       );
     }
 
-
     let newStock;
-
 
     /**
      * DECREASE
@@ -1317,35 +1203,28 @@ export const adjustStockForOrder = async (
       mode ===
       'decrease'
     ) {
-
       if (
         currentStock <
         qty
       ) {
-
         throw new Error(
-          `Maaf, stok menu ini sedang habis. for '${productId}'. Available ${currentStock}, requested ${qty}`
+          `Stok tidak mencukupi untuk '${productId}'. Tersedia ${currentStock}, diminta ${qty}`
         );
       }
-
 
       newStock =
         currentStock -
         qty;
-
     }
-
 
     /**
      * INCREASE
      */
     else {
-
       newStock =
         currentStock +
         qty;
     }
-
 
     /**
      * UPDATE PRODUCT
@@ -1363,12 +1242,10 @@ export const adjustStockForOrder = async (
         productId
       );
 
-
     if (updateStockError) {
       throw updateStockError;
     }
   }
-
 
   /**
    * ==================================================
@@ -1379,7 +1256,6 @@ export const adjustStockForOrder = async (
     mode ===
     'decrease'
   ) {
-
     const {
       error
     } = await supabase
@@ -1393,12 +1269,10 @@ export const adjustStockForOrder = async (
         orderNumber
       );
 
-
     if (error) {
       throw error;
     }
   }
-
 
   /**
    * ==================================================
@@ -1409,7 +1283,6 @@ export const adjustStockForOrder = async (
     mode ===
     'increase'
   ) {
-
     const {
       error
     } = await supabase
@@ -1423,12 +1296,10 @@ export const adjustStockForOrder = async (
         orderNumber
       );
 
-
     if (error) {
       throw error;
     }
   }
-
 
   return {
     success:
