@@ -6,49 +6,130 @@ import { successResponse, errorResponse } from '../utils/response.js';
 const inMemoryOrdersMap = new Map();
 
 /**
- * Ambil response order existing
+ * ======================================================
+ * PRODUCT ID ALIASES
+ * ======================================================
+ *
+ * Support ID frontend lama dan ID database terbaru.
+ *
+ * Frontend lama:
+ * arumeya-aren-latte
+ *
+ * Database:
+ * prod-01
  */
-const getExistingOrderResponse = async (supabase, order) => {
-  const { data: items } = await supabase
+const PRODUCT_ID_ALIASES = {
+  'arumeya-aren-latte': 'prod-01',
+  'arumeya-butterscotch': 'prod-02',
+  'arumeya-hazelnut-latte': 'prod-03',
+  'arumeya-banana-latte': 'prod-04',
+  'arumeya-americano': 'prod-05',
+};
+
+
+/**
+ * Normalize Product ID
+ */
+const normalizeProductId = (id) => {
+  const rawId = String(id || '');
+
+  return (
+    PRODUCT_ID_ALIASES[rawId] ||
+    rawId
+  );
+};
+
+
+/**
+ * ======================================================
+ * EXISTING ORDER RESPONSE
+ * ======================================================
+ */
+const getExistingOrderResponse = async (
+  supabase,
+  order
+) => {
+  const {
+    data: items,
+    error: itemsError
+  } = await supabase
     .from('order_items')
     .select('*')
-    .eq('order_number', order.order_number);
+    .eq(
+      'order_number',
+      order.order_number
+    );
+
+  if (itemsError) {
+    console.error(
+      'Existing order items lookup error:',
+      itemsError
+    );
+  }
 
   return {
-    checkout_id: order.checkout_id,
-    order_number: order.order_number,
-    total_amount: order.total_amount,
-    status: order.status,
+    checkout_id:
+      order.checkout_id,
+
+    order_number:
+      order.order_number,
+
+    total_amount:
+      order.total_amount,
+
+    status:
+      order.status,
 
     customer: {
-      name: order.customer_name,
-      email: order.customer_email,
-      phone: order.customer_phone
+      name:
+        order.customer_name,
+
+      email:
+        order.customer_email,
+
+      phone:
+        order.customer_phone
     },
 
-    items: items || [],
+    items:
+      items || [],
 
-    notes: order.notes || null,
+    notes:
+      order.notes || null,
 
-    payment: order.snap_token
-      ? {
-          token: order.snap_token,
-          redirect_url: order.payment_url
-        }
-      : null,
+    payment:
+      order.snap_token
+        ? {
+            token:
+              order.snap_token,
 
-    created_at: order.created_at,
-    idempotent: true
+            redirect_url:
+              order.payment_url
+          }
+        : null,
+
+    created_at:
+      order.created_at,
+
+    idempotent:
+      true
   };
 };
 
 
 /**
+ * ======================================================
  * POST /api/orders
+ * ======================================================
+ *
+ * Create order
  */
 export const createOrder = async (c) => {
   try {
-    const body = await c.req.json().catch(() => ({}));
+    const body =
+      await c.req
+        .json()
+        .catch(() => ({}));
 
     const {
       customer,
@@ -57,10 +138,12 @@ export const createOrder = async (c) => {
       checkout_id
     } = body;
 
-    // ================================
-    // VALIDASI CHECKOUT ID
-    // ================================
 
+    /**
+     * ==================================================
+     * 1. VALIDATE CHECKOUT ID
+     * ==================================================
+     */
     if (!checkout_id) {
       return errorResponse(
         c,
@@ -70,14 +153,19 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // VALIDASI CUSTOMER
-    // ================================
 
+    /**
+     * ==================================================
+     * 2. VALIDATE CUSTOMER
+     * ==================================================
+     */
     if (
       !customer ||
       !customer.name ||
-      (!customer.email && !customer.phone)
+      (
+        !customer.email &&
+        !customer.phone
+      )
     ) {
       return errorResponse(
         c,
@@ -87,11 +175,16 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // VALIDASI ITEMS
-    // ================================
 
-    if (!Array.isArray(items) || items.length === 0) {
+    /**
+     * ==================================================
+     * 3. VALIDATE ITEMS
+     * ==================================================
+     */
+    if (
+      !Array.isArray(items) ||
+      items.length === 0
+    ) {
       return errorResponse(
         c,
         'Invalid items',
@@ -100,7 +193,16 @@ export const createOrder = async (c) => {
       );
     }
 
-    const supabase = getSupabaseClient(c.env);
+
+    /**
+     * ==================================================
+     * 4. SUPABASE
+     * ==================================================
+     */
+    const supabase =
+      getSupabaseClient(
+        c.env
+      );
 
     if (!supabase) {
       return errorResponse(
@@ -111,17 +213,22 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // CEK DUPLICATE CHECKOUT
-    // ================================
 
+    /**
+     * ==================================================
+     * 5. CHECK DUPLICATE CHECKOUT
+     * ==================================================
+     */
     const {
       data: existingOrder,
       error: existingOrderError
     } = await supabase
       .from('orders')
       .select('*')
-      .eq('checkout_id', checkout_id)
+      .eq(
+        'checkout_id',
+        checkout_id
+      )
       .maybeSingle();
 
     if (existingOrderError) {
@@ -146,24 +253,32 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // AMBIL PRODUK DATABASE
-    // ================================
 
-    const productIds = Array.from(
-      new Set(
-        items
-          .map(item =>
-            String(
-              item.product_id ||
-              item.id ||
-              ''
-            )
-          )
-          .filter(Boolean)
-      )
-    );
+    /**
+     * ==================================================
+     * 6. NORMALIZE PRODUCT IDs
+     * ==================================================
+     */
+    const productIds =
+      Array.from(
+        new Set(
+          items
+            .map((item) => {
+              return normalizeProductId(
+                item.product_id ||
+                item.id
+              );
+            })
+            .filter(Boolean)
+        )
+      );
 
+
+    /**
+     * ==================================================
+     * 7. GET PRODUCTS
+     * ==================================================
+     */
     const dbProducts =
       await getProductsByIds(
         c.env,
@@ -172,26 +287,31 @@ export const createOrder = async (c) => {
 
     const dbProductMap =
       new Map(
-        dbProducts.map(product => [
-          String(product.id),
-          product
-        ])
+        dbProducts.map(
+          (product) => [
+            String(product.id),
+            product
+          ]
+        )
       );
 
+
+    /**
+     * ==================================================
+     * 8. VALIDATE PRODUCT DATA
+     * ==================================================
+     */
     let calculatedTotalAmount = 0;
 
     const validatedOrderItems = [];
 
-    // ================================
-    // VALIDASI PRODUK
-    // ================================
-
     for (const item of items) {
-      const pid = String(
-        item.product_id ||
-        item.id ||
-        ''
-      );
+
+      const pid =
+        normalizeProductId(
+          item.product_id ||
+          item.id
+        );
 
       const quantity =
         parseInt(
@@ -199,6 +319,8 @@ export const createOrder = async (c) => {
           10
         );
 
+
+      // Product ID required
       if (!pid) {
         return errorResponse(
           c,
@@ -208,6 +330,8 @@ export const createOrder = async (c) => {
         );
       }
 
+
+      // Quantity validation
       if (
         Number.isNaN(quantity) ||
         quantity <= 0
@@ -220,6 +344,8 @@ export const createOrder = async (c) => {
         );
       }
 
+
+      // Maximum order quantity
       if (quantity > 100) {
         return errorResponse(
           c,
@@ -229,11 +355,34 @@ export const createOrder = async (c) => {
         );
       }
 
-      const dbProduct =
-        dbProductMap.get(pid);
 
-      // Tidak ada fallback produk palsu
+      /**
+       * Product harus benar-benar ada.
+       * Tidak pakai fallback produk random.
+       */
+      const dbProduct =
+        dbProductMap.get(
+          pid
+        );
+
       if (!dbProduct) {
+        console.error(
+          'PRODUCT NOT FOUND:',
+          {
+            requestedProductId:
+              pid,
+
+            rawProductId:
+              item.product_id ||
+              item.id,
+
+            availableProducts:
+              dbProducts.map(
+                (p) => p.id
+              )
+          }
+        );
+
         return errorResponse(
           c,
           'Product not found',
@@ -242,8 +391,11 @@ export const createOrder = async (c) => {
         );
       }
 
+
+      // Product inactive
       if (
-        dbProduct.is_active === false
+        dbProduct.is_active ===
+        false
       ) {
         return errorResponse(
           c,
@@ -253,6 +405,10 @@ export const createOrder = async (c) => {
         );
       }
 
+
+      /**
+       * STOCK VALIDATION
+       */
       const stock =
         Number(
           dbProduct.stock
@@ -270,13 +426,22 @@ export const createOrder = async (c) => {
         );
       }
 
+
+      /**
+       * PRICE
+       *
+       * Harga selalu dari backend/database.
+       * Jangan percaya harga frontend.
+       */
       const unitPrice =
         Number(
           dbProduct.price
         );
 
       if (
-        !Number.isFinite(unitPrice) ||
+        !Number.isFinite(
+          unitPrice
+        ) ||
         unitPrice <= 0
       ) {
         return errorResponse(
@@ -287,11 +452,14 @@ export const createOrder = async (c) => {
         );
       }
 
+
       const subtotal =
-        unitPrice * quantity;
+        unitPrice *
+        quantity;
 
       calculatedTotalAmount +=
         subtotal;
+
 
       validatedOrderItems.push({
         product_id:
@@ -311,20 +479,27 @@ export const createOrder = async (c) => {
       });
     }
 
-    // ================================
-    // GENERATE ORDER NUMBER
-    // ================================
 
+    /**
+     * ==================================================
+     * 9. GENERATE ORDER NUMBER
+     * ==================================================
+     */
     const orderNumber =
       `ARC-${Date.now()}-${Math.floor(
         1000 +
         Math.random() * 9000
       )}`;
 
-    // ================================
-    // CUSTOMER HISTORY
-    // ================================
 
+    /**
+     * ==================================================
+     * 10. SAVE CUSTOMER
+     * ==================================================
+     *
+     * Customer history gagal tidak membuat
+     * order utama gagal.
+     */
     const {
       error: customerError
     } = await supabase
@@ -349,10 +524,12 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // CREATE ORDER
-    // ================================
 
+    /**
+     * ==================================================
+     * 11. CREATE ORDER
+     * ==================================================
+     */
     const {
       data: orderData,
       error: orderError
@@ -394,13 +571,23 @@ export const createOrder = async (c) => {
       .select()
       .single();
 
+
+    /**
+     * ==================================================
+     * ORDER INSERT FAILED
+     * ==================================================
+     */
     if (orderError) {
       console.error(
         'ORDER INSERT FAILED:',
         orderError
       );
 
-      // Mungkin request duplicate masuk bersamaan
+
+      /**
+       * Kemungkinan request yang sama
+       * masuk bersamaan.
+       */
       const {
         data: duplicateOrder
       } = await supabase
@@ -411,6 +598,7 @@ export const createOrder = async (c) => {
           checkout_id
         )
         .maybeSingle();
+
 
       if (duplicateOrder) {
         const duplicateResponse =
@@ -427,8 +615,13 @@ export const createOrder = async (c) => {
         );
       }
 
-      // PENTING:
-      // Jangan lanjut Midtrans kalau database gagal
+
+      /**
+       * PENTING:
+       *
+       * Kalau Supabase gagal,
+       * jangan bikin transaksi Midtrans.
+       */
       return errorResponse(
         c,
         'Failed to create order',
@@ -437,13 +630,15 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // CREATE ORDER ITEMS
-    // ================================
 
+    /**
+     * ==================================================
+     * 12. CREATE ORDER ITEMS
+     * ==================================================
+     */
     const orderItemsPayload =
       validatedOrderItems.map(
-        item => ({
+        (item) => ({
           order_id:
             orderData.id,
 
@@ -467,6 +662,7 @@ export const createOrder = async (c) => {
         })
       );
 
+
     const {
       error: orderItemsError
     } = await supabase
@@ -475,11 +671,14 @@ export const createOrder = async (c) => {
         orderItemsPayload
       );
 
+
     if (orderItemsError) {
+
       console.error(
         'ORDER ITEMS INSERT FAILED:',
         orderItemsError
       );
+
 
       await supabase
         .from('orders')
@@ -492,6 +691,7 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
+
       return errorResponse(
         c,
         'Failed to save order items',
@@ -500,13 +700,22 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // BARU CREATE MIDTRANS
-    // ================================
 
+    /**
+     * ==================================================
+     * 13. CREATE MIDTRANS
+     * ==================================================
+     *
+     * Midtrans hanya dibuat setelah:
+     *
+     * orders berhasil
+     * +
+     * order_items berhasil
+     */
     let paymentResult;
 
     try {
+
       paymentResult =
         await createSnapTransaction(
           c.env,
@@ -522,11 +731,14 @@ export const createOrder = async (c) => {
               validatedOrderItems
           }
         );
+
     } catch (paymentError) {
+
       console.error(
         'MIDTRANS CREATE FAILED:',
         paymentError
       );
+
 
       await supabase
         .from('orders')
@@ -539,6 +751,7 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
+
       return errorResponse(
         c,
         'Order saved but payment failed',
@@ -548,11 +761,16 @@ export const createOrder = async (c) => {
       );
     }
 
-    // ================================
-    // SAVE SNAP TOKEN
-    // ================================
 
-    if (paymentResult?.token) {
+    /**
+     * ==================================================
+     * 14. SAVE SNAP TOKEN
+     * ==================================================
+     */
+    if (
+      paymentResult?.token
+    ) {
+
       const {
         error: snapUpdateError
       } = await supabase
@@ -569,6 +787,7 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
+
       if (snapUpdateError) {
         console.error(
           'SNAP TOKEN SAVE ERROR:',
@@ -577,11 +796,14 @@ export const createOrder = async (c) => {
       }
     }
 
-    // ================================
-    // RESPONSE
-    // ================================
 
+    /**
+     * ==================================================
+     * 15. FINAL RESPONSE
+     * ==================================================
+     */
     const finalOrderResponse = {
+
       checkout_id,
 
       order_number:
@@ -594,6 +816,7 @@ export const createOrder = async (c) => {
         'pending',
 
       customer: {
+
         name:
           customer.name,
 
@@ -621,10 +844,12 @@ export const createOrder = async (c) => {
         new Date().toISOString()
     };
 
+
     inMemoryOrdersMap.set(
       orderNumber,
       finalOrderResponse
     );
+
 
     return successResponse(
       c,
@@ -634,10 +859,12 @@ export const createOrder = async (c) => {
     );
 
   } catch (err) {
+
     console.error(
       'Create Order Error:',
       err
     );
+
 
     return errorResponse(
       c,
@@ -651,14 +878,19 @@ export const createOrder = async (c) => {
 
 
 /**
+ * ======================================================
  * GET /api/orders/:orderNumber
+ * ======================================================
  */
 export const getOrderByNumber = async (c) => {
+
   try {
+
     const orderNumber =
       c.req.param(
         'orderNumber'
       );
+
 
     if (!orderNumber) {
       return errorResponse(
@@ -669,12 +901,15 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
+
     const supabase =
       getSupabaseClient(
         c.env
       );
 
+
     if (supabase) {
+
       const {
         data: order,
         error: orderError
@@ -687,10 +922,12 @@ export const getOrderByNumber = async (c) => {
         )
         .single();
 
+
       if (
         !orderError &&
         order
       ) {
+
         const {
           data: items
         } = await supabase
@@ -700,6 +937,7 @@ export const getOrderByNumber = async (c) => {
             'order_number',
             orderNumber
           );
+
 
         const {
           data: payments
@@ -717,27 +955,33 @@ export const getOrderByNumber = async (c) => {
             }
           );
 
+
         return successResponse(
           c,
           {
             ...order,
+
             items:
-              items ||
-              [],
+              items || [],
+
             payments:
-              payments ||
-              []
+              payments || []
           },
           'Order details retrieved successfully'
         );
       }
     }
 
+
+    /**
+     * Runtime fallback
+     */
     if (
       inMemoryOrdersMap.has(
         orderNumber
       )
     ) {
+
       return successResponse(
         c,
         inMemoryOrdersMap.get(
@@ -747,6 +991,7 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
+
     return errorResponse(
       c,
       'Order not found',
@@ -755,6 +1000,7 @@ export const getOrderByNumber = async (c) => {
     );
 
   } catch (err) {
+
     return errorResponse(
       c,
       'Failed to fetch order details',
@@ -767,7 +1013,9 @@ export const getOrderByNumber = async (c) => {
 
 
 /**
- * Update order status
+ * ======================================================
+ * UPDATE ORDER STATUS
+ * ======================================================
  */
 export const updateOrderStatus = async (
   env,
@@ -775,20 +1023,27 @@ export const updateOrderStatus = async (
   newStatus,
   paymentDetails = {}
 ) => {
+
   const supabase =
     getSupabaseClient(
       env
     );
 
+
+  /**
+   * Runtime cache update
+   */
   if (
     inMemoryOrdersMap.has(
       orderNumber
     )
   ) {
+
     const existing =
       inMemoryOrdersMap.get(
         orderNumber
       );
+
 
     inMemoryOrdersMap.set(
       orderNumber,
@@ -807,7 +1062,12 @@ export const updateOrderStatus = async (
     );
   }
 
+
+  /**
+   * Supabase update
+   */
   if (supabase) {
+
     const {
       error
     } = await supabase
@@ -824,28 +1084,40 @@ export const updateOrderStatus = async (
         orderNumber
       );
 
+
     if (error) {
       console.error(
         'UPDATE ORDER STATUS ERROR:',
         error
       );
+
+      throw error;
     }
   }
 };
 
 
 /**
- * Kurangi / kembalikan stok
+ * ======================================================
+ * STOCK MANAGEMENT
+ * ======================================================
+ *
+ * mode:
+ *
+ * decrease = payment successful
+ * increase = refund
  */
 export const adjustStockForOrder = async (
   env,
   orderNumber,
   mode = 'decrease'
 ) => {
+
   const supabase =
     getSupabaseClient(
       env
     );
+
 
   if (!supabase) {
     throw new Error(
@@ -853,6 +1125,12 @@ export const adjustStockForOrder = async (
     );
   }
 
+
+  /**
+   * ==================================================
+   * FIND ORDER
+   * ==================================================
+   */
   const {
     data: order,
     error: orderError
@@ -870,41 +1148,71 @@ export const adjustStockForOrder = async (
     )
     .single();
 
+
   if (
     orderError ||
     !order
   ) {
+
     throw new Error(
       `Order '${orderNumber}' not found`
     );
   }
 
-  // Sudah pernah dipotong
+
+  /**
+   * ==================================================
+   * PREVENT DOUBLE STOCK DEDUCTION
+   * ==================================================
+   */
   if (
-    mode === 'decrease' &&
+    mode ===
+      'decrease' &&
     order.stock_processed
   ) {
+
     return {
-      success: true,
-      skipped: true,
+      success:
+        true,
+
+      skipped:
+        true,
+
       reason:
         'Stock already deducted'
     };
   }
 
-  // Sudah pernah dikembalikan
+
+  /**
+   * ==================================================
+   * PREVENT DOUBLE STOCK RESTORE
+   * ==================================================
+   */
   if (
-    mode === 'increase' &&
+    mode ===
+      'increase' &&
     order.stock_restored
   ) {
+
     return {
-      success: true,
-      skipped: true,
+      success:
+        true,
+
+      skipped:
+        true,
+
       reason:
         'Stock already restored'
     };
   }
 
+
+  /**
+   * ==================================================
+   * GET ORDER ITEMS
+   * ==================================================
+   */
   const {
     data: items,
     error: itemsError
@@ -918,11 +1226,28 @@ export const adjustStockForOrder = async (
       orderNumber
     );
 
+
   if (itemsError) {
     throw itemsError;
   }
 
-  for (const item of items || []) {
+
+  /**
+   * ==================================================
+   * UPDATE PRODUCT STOCK
+   * ==================================================
+   */
+  for (
+    const item of
+    items || []
+  ) {
+
+    const productId =
+      normalizeProductId(
+        item.product_id
+      );
+
+
     const {
       data: product,
       error: productError
@@ -933,63 +1258,98 @@ export const adjustStockForOrder = async (
       )
       .eq(
         'id',
-        String(
-          item.product_id
-        )
+        productId
       )
       .single();
+
 
     if (
       productError ||
       !product
     ) {
+
       throw new Error(
-        `Product '${item.product_id}' not found`
+        `Product '${productId}' not found`
       );
     }
+
 
     const qty =
       Number(
         item.quantity
       );
 
+
     if (
       !Number.isFinite(qty) ||
       qty <= 0
     ) {
+
       continue;
     }
+
 
     const currentStock =
       Number(
         product.stock
       );
 
+
+    if (
+      !Number.isFinite(
+        currentStock
+      )
+    ) {
+
+      throw new Error(
+        `Invalid stock for '${productId}'`
+      );
+    }
+
+
     let newStock;
 
+
+    /**
+     * DECREASE
+     */
     if (
       mode ===
       'decrease'
     ) {
+
       if (
         currentStock <
         qty
       ) {
+
         throw new Error(
-          `Insufficient stock for '${item.product_id}'`
+          `Insufficient stock for '${productId}'. Available ${currentStock}, requested ${qty}`
         );
       }
+
 
       newStock =
         currentStock -
         qty;
 
-    } else {
+    }
+
+
+    /**
+     * INCREASE
+     */
+    else {
+
       newStock =
         currentStock +
         qty;
     }
 
+
+    /**
+     * UPDATE PRODUCT
+     */
     const {
       error: updateStockError
     } = await supabase
@@ -1000,21 +1360,29 @@ export const adjustStockForOrder = async (
       })
       .eq(
         'id',
-        String(
-          item.product_id
-        )
+        productId
       );
+
 
     if (updateStockError) {
       throw updateStockError;
     }
   }
 
+
+  /**
+   * ==================================================
+   * MARK STOCK AS PROCESSED
+   * ==================================================
+   */
   if (
     mode ===
     'decrease'
   ) {
-    await supabase
+
+    const {
+      error
+    } = await supabase
       .from('orders')
       .update({
         stock_processed:
@@ -1024,13 +1392,27 @@ export const adjustStockForOrder = async (
         'order_number',
         orderNumber
       );
+
+
+    if (error) {
+      throw error;
+    }
   }
 
+
+  /**
+   * ==================================================
+   * MARK STOCK AS RESTORED
+   * ==================================================
+   */
   if (
     mode ===
     'increase'
   ) {
-    await supabase
+
+    const {
+      error
+    } = await supabase
       .from('orders')
       .update({
         stock_restored:
@@ -1040,10 +1422,19 @@ export const adjustStockForOrder = async (
         'order_number',
         orderNumber
       );
+
+
+    if (error) {
+      throw error;
+    }
   }
 
+
   return {
-    success: true,
-    skipped: false
+    success:
+      true,
+
+    skipped:
+      false
   };
 };
