@@ -420,7 +420,7 @@ export const createOrder = async (c) => {
       ) {
         return errorResponse(
           c,
-          'Insufficient stock',
+          'Maaf, stok menu ini sedang habis.',
           `Only ${stock} unit(s) available for ${dbProduct.name}`,
           400
         );
@@ -1324,7 +1324,7 @@ export const adjustStockForOrder = async (
       ) {
 
         throw new Error(
-          `Insufficient stock for '${productId}'. Available ${currentStock}, requested ${qty}`
+          `Maaf, stok menu ini sedang habis. for '${productId}'. Available ${currentStock}, requested ${qty}`
         );
       }
 
