@@ -3,6 +3,9 @@ import { successResponse, errorResponse } from '../utils/response.js';
 
 /**
  * GET /api/products
+ * Ambil semua produk aktif
+ * Optional query:
+ * /api/products?category=Signature
  */
 export const getProducts = async (c) => {
   try {
@@ -21,7 +24,8 @@ export const getProducts = async (c) => {
     let query = supabase
       .from('products')
       .select('*')
-      .eq('is_active', true);
+      .eq('is_active', true)
+      .order('id', { ascending: true });
 
     if (category) {
       query = query.ilike('category', category);
@@ -51,7 +55,7 @@ export const getProducts = async (c) => {
     return errorResponse(
       c,
       'Failed to fetch products',
-      err?.message || err,
+      err?.message || String(err),
       500
     );
   }
@@ -60,6 +64,7 @@ export const getProducts = async (c) => {
 
 /**
  * GET /api/products/:id
+ * Ambil detail satu produk aktif berdasarkan ID
  */
 export const getProductById = async (c) => {
   try {
@@ -89,13 +94,25 @@ export const getProductById = async (c) => {
       .from('products')
       .select('*')
       .eq('id', id)
-      .single();
+      .eq('is_active', true)
+      .maybeSingle();
 
-    if (error || !data) {
+    if (error) {
+      console.error('Get product by ID error:', error);
+
+      return errorResponse(
+        c,
+        'Failed to fetch product details',
+        error.message,
+        500
+      );
+    }
+
+    if (!data) {
       return errorResponse(
         c,
         'Product not found',
-        `No product found with ID ${id}`,
+        `No active product found with ID ${id}`,
         404
       );
     }
@@ -111,7 +128,7 @@ export const getProductById = async (c) => {
     return errorResponse(
       c,
       'Failed to fetch product details',
-      err?.message || err,
+      err?.message || String(err),
       500
     );
   }
@@ -120,16 +137,35 @@ export const getProductById = async (c) => {
 
 /**
  * Helper untuk orders.js
- * Ambil beberapa produk berdasarkan ID.
+ *
+ * Ambil beberapa produk aktif berdasarkan array ID.
+ * Digunakan backend untuk validasi:
+ * - product_id
+ * - nama produk
+ * - harga asli dari database
+ * - status produk
+ *
+ * Frontend tidak boleh dijadikan sumber harga utama.
  */
 export const getProductsByIds = async (
   env,
   productIds = []
 ) => {
-  if (
-    !Array.isArray(productIds) ||
-    productIds.length === 0
-  ) {
+  if (!Array.isArray(productIds) || productIds.length === 0) {
+    return [];
+  }
+
+  // Hilangkan duplicate ID
+  const uniqueProductIds = [
+    ...new Set(
+      productIds
+        .filter(Boolean)
+        .map((id) => String(id).trim())
+        .filter(Boolean)
+    )
+  ];
+
+  if (uniqueProductIds.length === 0) {
     return [];
   }
 
@@ -144,7 +180,8 @@ export const getProductsByIds = async (
   const { data, error } = await supabase
     .from('products')
     .select('*')
-    .in('id', productIds);
+    .in('id', uniqueProductIds)
+    .eq('is_active', true);
 
   if (error) {
     console.error(
