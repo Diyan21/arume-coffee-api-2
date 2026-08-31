@@ -3048,4 +3048,423 @@ async (
       error
     } =
       await supabase
-       
+        .from(
+          'orders'
+        )
+        .update(
+          updatePayload
+        )
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
+
+    if (
+      error
+    ) {
+
+      console.error(
+        'UPDATE ORDER STATUS ERROR:',
+        error
+      );
+
+
+      throw error;
+    }
+  }
+};
+
+
+/* =========================================================
+   STOCK MANAGEMENT
+   ========================================================= */
+
+export const adjustStockForOrder =
+async (
+  env,
+  orderNumber,
+  mode = 'decrease'
+) => {
+
+  const supabase =
+    getSupabaseClient(
+      env
+    );
+
+
+  if (
+    !supabase
+  ) {
+
+    throw new Error(
+      'Supabase unavailable'
+    );
+  }
+
+
+  if (
+    mode !==
+      'decrease' &&
+    mode !==
+      'increase'
+  ) {
+
+    throw new Error(
+      `Invalid stock mode '${mode}'`
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     FIND ORDER
+     ------------------------------------------------------- */
+
+  const {
+    data:
+      order,
+
+    error:
+      orderError
+  } =
+    await supabase
+      .from(
+        'orders'
+      )
+      .select(`
+        id,
+        order_number,
+        stock_processed,
+        stock_restored
+      `)
+      .eq(
+        'order_number',
+        orderNumber
+      )
+      .maybeSingle();
+
+
+  if (
+    orderError ||
+    !order
+  ) {
+
+    throw new Error(
+      `Order '${orderNumber}' not found`
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     PREVENT DOUBLE DEDUCTION
+     ------------------------------------------------------- */
+
+  if (
+    mode ===
+      'decrease' &&
+    order.stock_processed
+  ) {
+
+    return {
+      success:
+        true,
+
+      skipped:
+        true,
+
+      reason:
+        'Stock already deducted'
+    };
+  }
+
+
+  /* -------------------------------------------------------
+     PREVENT DOUBLE RESTORE
+     ------------------------------------------------------- */
+
+  if (
+    mode ===
+      'increase' &&
+    order.stock_restored
+  ) {
+
+    return {
+      success:
+        true,
+
+      skipped:
+        true,
+
+      reason:
+        'Stock already restored'
+    };
+  }
+
+
+  /* -------------------------------------------------------
+     GET ORDER ITEMS
+     ------------------------------------------------------- */
+
+  const {
+    data:
+      items,
+
+    error:
+      itemsError
+  } =
+    await supabase
+      .from(
+        'order_items'
+      )
+      .select(
+        'product_id, quantity'
+      )
+      .eq(
+        'order_number',
+        orderNumber
+      );
+
+
+  if (
+    itemsError
+  ) {
+
+    throw itemsError;
+  }
+
+
+  if (
+    !items ||
+    items.length ===
+      0
+  ) {
+
+    throw new Error(
+      `No order items found for '${orderNumber}'`
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     UPDATE EACH PRODUCT
+     ------------------------------------------------------- */
+
+  for (
+    const item of items
+  ) {
+
+    const productId =
+      normalizeProductId(
+        item.product_id
+      );
+
+
+    const {
+      data:
+        product,
+
+      error:
+        productError
+    } =
+      await supabase
+        .from(
+          'products'
+        )
+        .select(
+          'id, stock'
+        )
+        .eq(
+          'id',
+          productId
+        )
+        .maybeSingle();
+
+
+    if (
+      productError ||
+      !product
+    ) {
+
+      throw new Error(
+        `Product '${productId}' not found`
+      );
+    }
+
+
+    const qty =
+      Number(
+        item.quantity
+      );
+
+
+    if (
+      !Number.isFinite(
+        qty
+      ) ||
+      qty <=
+        0
+    ) {
+
+      continue;
+    }
+
+
+    const currentStock =
+      Number(
+        product.stock
+      );
+
+
+    if (
+      !Number.isFinite(
+        currentStock
+      )
+    ) {
+
+      throw new Error(
+        `Invalid stock for '${productId}'`
+      );
+    }
+
+
+    let newStock;
+
+
+    if (
+      mode ===
+      'decrease'
+    ) {
+
+      if (
+        currentStock <
+        qty
+      ) {
+
+        throw new Error(
+          `Stok tidak mencukupi untuk '${productId}'. Tersedia ${currentStock}, diminta ${qty}`
+        );
+      }
+
+
+      newStock =
+        currentStock -
+        qty;
+
+    } else {
+
+      newStock =
+        currentStock +
+        qty;
+    }
+
+
+    const {
+      error:
+        updateStockError
+    } =
+      await supabase
+        .from(
+          'products'
+        )
+        .update({
+          stock:
+            newStock
+        })
+        .eq(
+          'id',
+          productId
+        );
+
+
+    if (
+      updateStockError
+    ) {
+
+      throw updateStockError;
+    }
+  }
+
+
+  /* -------------------------------------------------------
+     MARK STOCK PROCESSED
+     ------------------------------------------------------- */
+
+  if (
+    mode ===
+      'decrease'
+  ) {
+
+    const {
+      error
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .update({
+          stock_processed:
+            true
+        })
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
+
+    if (
+      error
+    ) {
+
+      throw error;
+    }
+  }
+
+
+  /* -------------------------------------------------------
+     MARK STOCK RESTORED
+     ------------------------------------------------------- */
+
+  if (
+    mode ===
+      'increase'
+  ) {
+
+    const {
+      error
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .update({
+          stock_restored:
+            true
+        })
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
+
+    if (
+      error
+    ) {
+
+      throw error;
+    }
+  }
+
+
+  return {
+    success:
+      true,
+
+    skipped:
+      false,
+
+    mode,
+
+    order_number:
+      orderNumber
+  };
+};
