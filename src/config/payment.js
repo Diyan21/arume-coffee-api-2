@@ -186,7 +186,7 @@ async (
       'ID',
 
     capture_method:
-      'AUTOMATIC_CAPTURE',
+      'AUTOMATIC',
 
     /*
      * Setelah pembayaran berhasil:
