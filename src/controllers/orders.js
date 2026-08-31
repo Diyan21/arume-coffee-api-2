@@ -231,21 +231,23 @@ async (c) => {
 
     /* -----------------------------------------------------
        2. CUSTOMER
+
+       Nama wajib.
+       Email dan phone opsional.
        ----------------------------------------------------- */
 
     if (
       !customer ||
       !customer.name ||
-      (
-        !customer.email &&
-        !customer.phone
-      )
+      !String(
+        customer.name
+      ).trim()
     ) {
 
       return errorResponse(
         c,
         'Invalid customer information',
-        'Customer name and at least email or phone are required',
+        'Customer name is required',
         400
       );
     }
@@ -607,15 +609,23 @@ async (c) => {
         .from('customers')
         .insert({
           name:
-            customer.name,
+            String(
+              customer.name
+            ).trim(),
 
           email:
-            customer.email ||
-            null,
+            customer.email
+              ? String(
+                  customer.email
+                ).trim()
+              : null,
 
           phone:
-            customer.phone ||
-            null
+            customer.phone
+              ? String(
+                  customer.phone
+                ).trim()
+              : null
         });
 
 
@@ -649,15 +659,23 @@ async (c) => {
             orderNumber,
 
           customer_name:
-            customer.name,
+            String(
+              customer.name
+            ).trim(),
 
           customer_email:
-            customer.email ||
-            null,
+            customer.email
+              ? String(
+                  customer.email
+                ).trim()
+              : null,
 
           customer_phone:
-            customer.phone ||
-            null,
+            customer.phone
+              ? String(
+                  customer.phone
+                ).trim()
+              : null,
 
           total_amount:
             calculatedTotalAmount,
@@ -826,10 +844,7 @@ async (c) => {
     /* -----------------------------------------------------
        13. FINAL ORDER RESPONSE
 
-       IMPORTANT:
-       Tidak membuat payment di sini.
-
-       Payment dibuat lewat:
+       Payment dibuat terpisah lewat:
        POST /api/payment/create
        ----------------------------------------------------- */
 
@@ -847,15 +862,23 @@ async (c) => {
 
       customer: {
         name:
-          customer.name,
+          String(
+            customer.name
+          ).trim(),
 
         email:
-          customer.email ||
-          null,
+          customer.email
+            ? String(
+                customer.email
+              ).trim()
+            : null,
 
         phone:
-          customer.phone ||
-          null
+          customer.phone
+            ? String(
+                customer.phone
+              ).trim()
+            : null
       },
 
       items:
@@ -1561,6 +1584,7 @@ async (
       false,
 
     mode,
+
     order_number:
       orderNumber
   };
