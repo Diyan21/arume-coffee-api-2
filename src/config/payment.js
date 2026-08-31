@@ -133,32 +133,36 @@ async (
 
 
   const payload = {
-    reference_id:
-      referenceId,
+  reference_id: safeReferenceId,
+  session_type: 'PAY',
+  mode: 'PAYMENT_LINK',
 
-    session_type:
-      'PAY',
+  amount: Number(grossAmount),
 
-    mode:
-      'PAYMENT_LINK',
+  currency: 'IDR',
+  country: 'ID',
 
-    amount,
+  capture_method: 'AUTOMATIC_CAPTURE',
 
-    currency:
-      'IDR',
+  success_return_url:
+    `https://arumeya.com/?payment=success&order=${encodeURIComponent(orderNumber)}`,
 
-    country:
-      'ID',
+  cancel_return_url:
+    `https://arumeya.com/?payment=cancelled&order=${encodeURIComponent(orderNumber)}`,
 
-    capture_method:
-      'AUTOMATIC',
-
-    success_return_url:
-      'https://arumeya.com/payment-success',
-
-    cancel_return_url:
-      'https://arumeya.com/payment-cancelled'
-  };
+  ...(customer
+    ? {
+        customer: {
+          reference_id: `customer-${safeReferenceId}`,
+          type: 'INDIVIDUAL',
+          email: customer.email,
+          individual_detail: {
+            given_names: customer.name || 'Customer',
+          },
+        },
+      }
+    : {}),
+};
 
 
   /*
