@@ -1,69 +1,130 @@
-import { getSupabaseClient } from '../config/supabase.js';
-import { getProductsByIds } from './products.js';
-import { createSnapTransaction } from '../config/payment.js';
-import { successResponse, errorResponse } from '../utils/response.js';
+import {
+  getSupabaseClient
+} from '../config/supabase.js';
 
-const inMemoryOrdersMap = new Map();
+import {
+  getProductsByIds
+} from './products.js';
 
-/**
- * ======================================================
- * PRODUCT ID ALIASES
- * ======================================================
- *
- * Support ID frontend lama dan ID database terbaru.
- *
- * Frontend lama:
- * arumeya-aren-latte
- *
- * Database:
- * prod-01
- */
+import {
+  successResponse,
+  errorResponse
+} from '../utils/response.js';
+
+
+/* =========================================================
+   MEMORY FALLBACK
+   ========================================================= */
+
+const inMemoryOrdersMap =
+  new Map();
+
+
+/* =========================================================
+   PRODUCT ID ALIASES
+   ========================================================= */
+
 const PRODUCT_ID_ALIASES = {
-  'arumeya-aren-latte': 'prod-01',
-  'arumeya-butterscotch': 'prod-02',
-  'arumeya-hazelnut-latte': 'prod-03',
-  'arumeya-banana-latte': 'prod-04',
-  'arumeya-americano': 'prod-05',
+  'arumeya-aren-latte':
+    'prod-01',
+
+  'arumeya-butterscotch':
+    'prod-02',
+
+  'arumeya-hazelnut-latte':
+    'prod-03',
+
+  'arumeya-banana-latte':
+    'prod-04',
+
+  'arumeya-americano':
+    'prod-05'
 };
 
-/**
- * Normalize Product ID
- */
-const normalizeProductId = (id) => {
-  const rawId = String(id || '');
+
+/* =========================================================
+   NORMALIZE PRODUCT ID
+   ========================================================= */
+
+const normalizeProductId =
+(id) => {
+
+  const rawId =
+    String(
+      id || ''
+    );
 
   return (
-    PRODUCT_ID_ALIASES[rawId] ||
+    PRODUCT_ID_ALIASES[
+      rawId
+    ] ||
     rawId
   );
 };
 
-/**
- * ======================================================
- * EXISTING ORDER RESPONSE
- * ======================================================
- */
-const getExistingOrderResponse = async (
+
+/* =========================================================
+   EXISTING ORDER RESPONSE
+   ========================================================= */
+
+const getExistingOrderResponse =
+async (
   supabase,
   order
 ) => {
+
   const {
     data: items,
     error: itemsError
-  } = await supabase
-    .from('order_items')
-    .select('*')
-    .eq(
-      'order_number',
-      order.order_number
-    );
+  } =
+    await supabase
+      .from('order_items')
+      .select('*')
+      .eq(
+        'order_number',
+        order.order_number
+      );
+
 
   if (itemsError) {
+
     console.error(
       'Existing order items lookup error:',
       itemsError
     );
   }
+
+
+  let payment =
+    null;
+
+
+  /*
+   * Jika order sudah punya
+   * Xendit Payment Session.
+   */
+  if (
+    order.payment_provider ===
+      'xendit' &&
+    order.payment_id &&
+    order.payment_url
+  ) {
+
+    payment = {
+      provider:
+        'xendit',
+
+      session_id:
+        order.payment_id,
+
+      redirect_url:
+        order.payment_url,
+
+      payment_link_url:
+        order.payment_url
+    };
+  }
+
 
   return {
     checkout_id:
@@ -93,18 +154,30 @@ const getExistingOrderResponse = async (
       items || [],
 
     notes:
-      order.notes || null,
+      order.notes ||
+      null,
 
-    payment:
-      order.snap_token
-        ? {
-            token:
-              order.snap_token,
+    payment,
 
-            redirect_url:
-              order.payment_url
-          }
-        : null,
+    payment_provider:
+      order.payment_provider ||
+      null,
+
+    payment_id:
+      order.payment_id ||
+      null,
+
+    payment_method:
+      order.payment_method ||
+      null,
+
+    payment_url:
+      order.payment_url ||
+      null,
+
+    paid_at:
+      order.paid_at ||
+      null,
 
     created_at:
       order.created_at,
@@ -114,19 +187,24 @@ const getExistingOrderResponse = async (
   };
 };
 
-/**
- * ======================================================
- * POST /api/orders
- * ======================================================
- *
- * Create order
- */
-export const createOrder = async (c) => {
+
+/* =========================================================
+   CREATE ORDER
+   POST /api/orders
+   ========================================================= */
+
+export const createOrder =
+async (c) => {
+
   try {
+
     const body =
       await c.req
         .json()
-        .catch(() => ({}));
+        .catch(
+          () => ({})
+        );
+
 
     const {
       customer,
@@ -135,12 +213,13 @@ export const createOrder = async (c) => {
       checkout_id
     } = body;
 
-    /**
-     * ==================================================
-     * 1. VALIDATE CHECKOUT ID
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       1. CHECKOUT ID
+       ----------------------------------------------------- */
+
     if (!checkout_id) {
+
       return errorResponse(
         c,
         'Checkout ID is required',
@@ -149,11 +228,11 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 2. VALIDATE CUSTOMER
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       2. CUSTOMER
+       ----------------------------------------------------- */
+
     if (
       !customer ||
       !customer.name ||
@@ -162,6 +241,7 @@ export const createOrder = async (c) => {
         !customer.phone
       )
     ) {
+
       return errorResponse(
         c,
         'Invalid customer information',
@@ -170,15 +250,18 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 3. VALIDATE ITEMS
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       3. ITEMS
+       ----------------------------------------------------- */
+
     if (
-      !Array.isArray(items) ||
+      !Array.isArray(
+        items
+      ) ||
       items.length === 0
     ) {
+
       return errorResponse(
         c,
         'Invalid items',
@@ -187,17 +270,19 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 4. SUPABASE
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       4. SUPABASE
+       ----------------------------------------------------- */
+
     const supabase =
       getSupabaseClient(
         c.env
       );
 
+
     if (!supabase) {
+
       return errorResponse(
         c,
         'Database unavailable',
@@ -206,36 +291,42 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 5. CHECK DUPLICATE CHECKOUT
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       5. IDEMPOTENT CHECKOUT
+       ----------------------------------------------------- */
+
     const {
       data: existingOrder,
       error: existingOrderError
-    } = await supabase
-      .from('orders')
-      .select('*')
-      .eq(
-        'checkout_id',
-        checkout_id
-      )
-      .maybeSingle();
+    } =
+      await supabase
+        .from('orders')
+        .select('*')
+        .eq(
+          'checkout_id',
+          checkout_id
+        )
+        .maybeSingle();
+
 
     if (existingOrderError) {
+
       console.error(
         'Checkout lookup error:',
         existingOrderError
       );
     }
 
+
     if (existingOrder) {
+
       const existingResponse =
         await getExistingOrderResponse(
           supabase,
           existingOrder
         );
+
 
       return successResponse(
         c,
@@ -245,61 +336,77 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 6. NORMALIZE PRODUCT IDs
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       6. NORMALIZE PRODUCT IDS
+       ----------------------------------------------------- */
+
     const productIds =
       Array.from(
         new Set(
           items
-            .map((item) => {
-              return normalizeProductId(
-                item.product_id ||
-                item.id
-              );
-            })
-            .filter(Boolean)
+            .map(
+              (item) => {
+
+                return normalizeProductId(
+                  item.product_id ||
+                  item.id
+                );
+              }
+            )
+            .filter(
+              Boolean
+            )
         )
       );
 
-    /**
-     * ==================================================
-     * 7. GET PRODUCTS
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       7. LOAD PRODUCTS
+       ----------------------------------------------------- */
+
     const dbProducts =
       await getProductsByIds(
         c.env,
         productIds
       );
 
+
     const dbProductMap =
       new Map(
         dbProducts.map(
           (product) => [
-            String(product.id),
+            String(
+              product.id
+            ),
             product
           ]
         )
       );
 
-    /**
-     * ==================================================
-     * 8. VALIDATE PRODUCT DATA
-     * ==================================================
-     */
-    let calculatedTotalAmount = 0;
 
-    const validatedOrderItems = [];
+    /* -----------------------------------------------------
+       8. VALIDATE PRODUCTS
+       ----------------------------------------------------- */
 
-    for (const item of items) {
+    let calculatedTotalAmount =
+      0;
+
+
+    const validatedOrderItems =
+      [];
+
+
+    for (
+      const item of items
+    ) {
+
       const pid =
         normalizeProductId(
           item.product_id ||
           item.id
         );
+
 
       const quantity =
         parseInt(
@@ -307,8 +414,9 @@ export const createOrder = async (c) => {
           10
         );
 
-      // Product ID required
+
       if (!pid) {
+
         return errorResponse(
           c,
           'Invalid product',
@@ -317,11 +425,14 @@ export const createOrder = async (c) => {
         );
       }
 
-      // Quantity validation
+
       if (
-        Number.isNaN(quantity) ||
+        Number.isNaN(
+          quantity
+        ) ||
         quantity <= 0
       ) {
+
         return errorResponse(
           c,
           'Invalid quantity',
@@ -330,8 +441,11 @@ export const createOrder = async (c) => {
         );
       }
 
-      // Maximum order quantity
-      if (quantity > 100) {
+
+      if (
+        quantity > 100
+      ) {
+
         return errorResponse(
           c,
           'Invalid quantity',
@@ -340,16 +454,15 @@ export const createOrder = async (c) => {
         );
       }
 
-      /**
-       * Product harus benar-benar ada.
-       * Tidak pakai fallback produk random.
-       */
+
       const dbProduct =
         dbProductMap.get(
           pid
         );
 
+
       if (!dbProduct) {
+
         console.error(
           'PRODUCT NOT FOUND:',
           {
@@ -367,6 +480,7 @@ export const createOrder = async (c) => {
           }
         );
 
+
         return errorResponse(
           c,
           'Product not found',
@@ -375,11 +489,12 @@ export const createOrder = async (c) => {
         );
       }
 
-      // Product inactive
+
       if (
         dbProduct.is_active ===
         false
       ) {
+
         return errorResponse(
           c,
           'Product unavailable',
@@ -388,18 +503,24 @@ export const createOrder = async (c) => {
         );
       }
 
-      /**
-       * STOCK VALIDATION
-       */
+
+      /* ---------------------------------------------------
+         STOCK VALIDATION
+         --------------------------------------------------- */
+
       const stock =
         Number(
           dbProduct.stock
         );
 
+
       if (
-        Number.isFinite(stock) &&
+        Number.isFinite(
+          stock
+        ) &&
         quantity > stock
       ) {
+
         return errorResponse(
           c,
           'Maaf, stok menu ini sedang habis.',
@@ -408,16 +529,16 @@ export const createOrder = async (c) => {
         );
       }
 
-      /**
-       * PRICE
-       *
-       * Harga selalu dari backend/database.
-       * Jangan percaya harga frontend.
-       */
+
+      /* ---------------------------------------------------
+         PRICE FROM DATABASE
+         --------------------------------------------------- */
+
       const unitPrice =
         Number(
           dbProduct.price
         );
+
 
       if (
         !Number.isFinite(
@@ -425,6 +546,7 @@ export const createOrder = async (c) => {
         ) ||
         unitPrice <= 0
       ) {
+
         return errorResponse(
           c,
           'Invalid product price',
@@ -433,12 +555,15 @@ export const createOrder = async (c) => {
         );
       }
 
+
       const subtotal =
         unitPrice *
         quantity;
 
+
       calculatedTotalAmount +=
         subtotal;
+
 
       validatedOrderItems.push({
         product_id:
@@ -458,127 +583,157 @@ export const createOrder = async (c) => {
       });
     }
 
-    /**
-     * ==================================================
-     * 9. GENERATE ORDER NUMBER
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       9. ORDER NUMBER
+       ----------------------------------------------------- */
+
     const orderNumber =
       `ARC-${Date.now()}-${Math.floor(
         1000 +
-        Math.random() * 9000
+        Math.random() *
+        9000
       )}`;
 
-    /**
-     * ==================================================
-     * 10. SAVE CUSTOMER
-     * ==================================================
-     *
-     * Customer history gagal tidak membuat
-     * order utama gagal.
-     */
+
+    /* -----------------------------------------------------
+       10. SAVE CUSTOMER HISTORY
+       ----------------------------------------------------- */
+
     const {
       error: customerError
-    } = await supabase
-      .from('customers')
-      .insert({
-        name:
-          customer.name,
+    } =
+      await supabase
+        .from('customers')
+        .insert({
+          name:
+            customer.name,
 
-        email:
-          customer.email ||
-          null,
+          email:
+            customer.email ||
+            null,
 
-        phone:
-          customer.phone ||
-          null
-      });
+          phone:
+            customer.phone ||
+            null
+        });
+
 
     if (customerError) {
+
+      /*
+       * Customer history bukan
+       * data utama checkout.
+       */
       console.warn(
         'Customer insert warning:',
         customerError
       );
     }
 
-    /**
-     * ==================================================
-     * 11. CREATE ORDER
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       11. CREATE ORDER
+       ----------------------------------------------------- */
+
     const {
       data: orderData,
       error: orderError
-    } = await supabase
-      .from('orders')
-      .insert({
-        checkout_id,
+    } =
+      await supabase
+        .from('orders')
+        .insert({
+          checkout_id,
 
-        order_number:
-          orderNumber,
+          order_number:
+            orderNumber,
 
-        customer_name:
-          customer.name,
+          customer_name:
+            customer.name,
 
-        customer_email:
-          customer.email ||
-          null,
+          customer_email:
+            customer.email ||
+            null,
 
-        customer_phone:
-          customer.phone ||
-          null,
+          customer_phone:
+            customer.phone ||
+            null,
 
-        total_amount:
-          calculatedTotalAmount,
+          total_amount:
+            calculatedTotalAmount,
 
-        status:
-          'pending',
+          status:
+            'pending',
 
-        notes:
-          notes ||
-          null,
+          notes:
+            notes ||
+            null,
 
-        stock_processed:
-          false,
+          payment_provider:
+            null,
 
-        stock_restored:
-          false
-      })
-      .select()
-      .single();
+          payment_id:
+            null,
 
-    /**
-     * ==================================================
-     * ORDER INSERT FAILED
-     * ==================================================
-     */
+          payment_method:
+            null,
+
+          payment_url:
+            null,
+
+          paid_at:
+            null,
+
+          snap_token:
+            null,
+
+          stock_processed:
+            false,
+
+          stock_restored:
+            false
+        })
+        .select()
+        .single();
+
+
+    /* -----------------------------------------------------
+       ORDER INSERT ERROR
+       ----------------------------------------------------- */
+
     if (orderError) {
+
       console.error(
         'ORDER INSERT FAILED:',
         orderError
       );
 
-      /**
-       * Kemungkinan request yang sama
-       * masuk bersamaan.
+
+      /*
+       * Request bersamaan dengan
+       * checkout_id yang sama.
        */
       const {
         data: duplicateOrder
-      } = await supabase
-        .from('orders')
-        .select('*')
-        .eq(
-          'checkout_id',
-          checkout_id
-        )
-        .maybeSingle();
+      } =
+        await supabase
+          .from('orders')
+          .select('*')
+          .eq(
+            'checkout_id',
+            checkout_id
+          )
+          .maybeSingle();
+
 
       if (duplicateOrder) {
+
         const duplicateResponse =
           await getExistingOrderResponse(
             supabase,
             duplicateOrder
           );
+
 
         return successResponse(
           c,
@@ -588,10 +743,7 @@ export const createOrder = async (c) => {
         );
       }
 
-      /**
-       * Kalau Supabase gagal,
-       * jangan bikin transaksi Midtrans.
-       */
+
       return errorResponse(
         c,
         'Failed to create order',
@@ -600,11 +752,11 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 12. CREATE ORDER ITEMS
-     * ==================================================
-     */
+
+    /* -----------------------------------------------------
+       12. SAVE ORDER ITEMS
+       ----------------------------------------------------- */
+
     const orderItemsPayload =
       validatedOrderItems.map(
         (item) => ({
@@ -631,19 +783,24 @@ export const createOrder = async (c) => {
         })
       );
 
+
     const {
       error: orderItemsError
-    } = await supabase
-      .from('order_items')
-      .insert(
-        orderItemsPayload
-      );
+    } =
+      await supabase
+        .from('order_items')
+        .insert(
+          orderItemsPayload
+        );
+
 
     if (orderItemsError) {
+
       console.error(
         'ORDER ITEMS INSERT FAILED:',
         orderItemsError
       );
+
 
       await supabase
         .from('orders')
@@ -656,6 +813,7 @@ export const createOrder = async (c) => {
           orderData.id
         );
 
+
       return errorResponse(
         c,
         'Failed to save order items',
@@ -664,93 +822,17 @@ export const createOrder = async (c) => {
       );
     }
 
-    /**
-     * ==================================================
-     * 13. CREATE MIDTRANS
-     * ==================================================
-     */
-    let paymentResult;
 
-    try {
-      paymentResult =
-        await createSnapTransaction(
-          c.env,
-          {
-            orderNumber,
+    /* -----------------------------------------------------
+       13. FINAL ORDER RESPONSE
 
-            grossAmount:
-              calculatedTotalAmount,
+       IMPORTANT:
+       Tidak membuat payment di sini.
 
-            customer,
+       Payment dibuat lewat:
+       POST /api/payment/create
+       ----------------------------------------------------- */
 
-            items:
-              validatedOrderItems
-          }
-        );
-
-    } catch (paymentError) {
-      console.error(
-        'MIDTRANS CREATE FAILED:',
-        paymentError
-      );
-
-      await supabase
-        .from('orders')
-        .update({
-          status:
-            'payment_error'
-        })
-        .eq(
-          'id',
-          orderData.id
-        );
-
-      return errorResponse(
-        c,
-        'Order saved but payment failed',
-        paymentError?.message ||
-        paymentError,
-        502
-      );
-    }
-
-    /**
-     * ==================================================
-     * 14. SAVE SNAP TOKEN
-     * ==================================================
-     */
-    if (
-      paymentResult?.token
-    ) {
-      const {
-        error: snapUpdateError
-      } = await supabase
-        .from('orders')
-        .update({
-          snap_token:
-            paymentResult.token,
-
-          payment_url:
-            paymentResult.redirect_url
-        })
-        .eq(
-          'id',
-          orderData.id
-        );
-
-      if (snapUpdateError) {
-        console.error(
-          'SNAP TOKEN SAVE ERROR:',
-          snapUpdateError
-        );
-      }
-    }
-
-    /**
-     * ==================================================
-     * 15. FINAL RESPONSE
-     * ==================================================
-     */
     const finalOrderResponse = {
       checkout_id,
 
@@ -784,17 +866,32 @@ export const createOrder = async (c) => {
         null,
 
       payment:
-        paymentResult,
+        null,
+
+      payment_provider:
+        null,
+
+      payment_id:
+        null,
+
+      payment_method:
+        null,
+
+      payment_url:
+        null,
 
       created_at:
         orderData.created_at ||
-        new Date().toISOString()
+        new Date()
+          .toISOString()
     };
+
 
     inMemoryOrdersMap.set(
       orderNumber,
       finalOrderResponse
     );
+
 
     return successResponse(
       c,
@@ -803,11 +900,14 @@ export const createOrder = async (c) => {
       201
     );
 
+
   } catch (err) {
+
     console.error(
       'Create Order Error:',
       err
     );
+
 
     return errorResponse(
       c,
@@ -819,19 +919,25 @@ export const createOrder = async (c) => {
   }
 };
 
-/**
- * ======================================================
- * GET /api/orders/:orderNumber
- * ======================================================
- */
-export const getOrderByNumber = async (c) => {
+
+/* =========================================================
+   GET ORDER
+   GET /api/orders/:orderNumber
+   ========================================================= */
+
+export const getOrderByNumber =
+async (c) => {
+
   try {
+
     const orderNumber =
       c.req.param(
         'orderNumber'
       );
 
+
     if (!orderNumber) {
+
       return errorResponse(
         c,
         'Order number is required',
@@ -840,53 +946,84 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
+
     const supabase =
       getSupabaseClient(
         c.env
       );
 
+
     if (supabase) {
+
       const {
         data: order,
         error: orderError
-      } = await supabase
-        .from('orders')
-        .select('*')
-        .eq(
-          'order_number',
-          orderNumber
-        )
-        .single();
-
-      if (
-        !orderError &&
-        order
-      ) {
-        const {
-          data: items
-        } = await supabase
-          .from('order_items')
-          .select('*')
-          .eq(
-            'order_number',
-            orderNumber
-          );
-
-        const {
-          data: payments
-        } = await supabase
-          .from('payments')
+      } =
+        await supabase
+          .from('orders')
           .select('*')
           .eq(
             'order_number',
             orderNumber
           )
-          .order(
-            'created_at',
-            {
-              ascending: false
-            }
+          .maybeSingle();
+
+
+      if (
+        !orderError &&
+        order
+      ) {
+
+        const {
+          data: items,
+          error: itemsError
+        } =
+          await supabase
+            .from('order_items')
+            .select('*')
+            .eq(
+              'order_number',
+              orderNumber
+            );
+
+
+        if (itemsError) {
+
+          console.error(
+            'Order items lookup error:',
+            itemsError
           );
+        }
+
+
+        const {
+          data: payments,
+          error: paymentsError
+        } =
+          await supabase
+            .from('payments')
+            .select('*')
+            .eq(
+              'order_number',
+              orderNumber
+            )
+            .order(
+              'created_at',
+              {
+                ascending:
+                  false
+              }
+            );
+
+
+        if (paymentsError) {
+
+          console.error(
+            'Payment history lookup error:',
+            paymentsError
+          );
+        }
+
 
         return successResponse(
           c,
@@ -897,18 +1034,42 @@ export const getOrderByNumber = async (c) => {
               items || [],
 
             payments:
-              payments || []
+              payments || [],
+
+            payment:
+              (
+                order.payment_provider ===
+                  'xendit' &&
+                order.payment_id &&
+                order.payment_url
+              )
+                ? {
+                    provider:
+                      'xendit',
+
+                    session_id:
+                      order.payment_id,
+
+                    redirect_url:
+                      order.payment_url,
+
+                    payment_link_url:
+                      order.payment_url
+                  }
+                : null
           },
           'Order details retrieved successfully'
         );
       }
     }
 
+
     if (
       inMemoryOrdersMap.has(
         orderNumber
       )
     ) {
+
       return successResponse(
         c,
         inMemoryOrdersMap.get(
@@ -918,6 +1079,7 @@ export const getOrderByNumber = async (c) => {
       );
     }
 
+
     return errorResponse(
       c,
       'Order not found',
@@ -925,7 +1087,9 @@ export const getOrderByNumber = async (c) => {
       404
     );
 
+
   } catch (err) {
+
     return errorResponse(
       c,
       'Failed to fetch order details',
@@ -936,31 +1100,40 @@ export const getOrderByNumber = async (c) => {
   }
 };
 
-/**
- * ======================================================
- * UPDATE ORDER STATUS
- * ======================================================
- */
-export const updateOrderStatus = async (
+
+/* =========================================================
+   UPDATE ORDER STATUS
+   ========================================================= */
+
+export const updateOrderStatus =
+async (
   env,
   orderNumber,
   newStatus,
   paymentDetails = {}
 ) => {
+
   const supabase =
     getSupabaseClient(
       env
     );
+
+
+  /* -------------------------------------------------------
+     MEMORY
+     ------------------------------------------------------- */
 
   if (
     inMemoryOrdersMap.has(
       orderNumber
     )
   ) {
+
     const existing =
       inMemoryOrdersMap.get(
         orderNumber
       );
+
 
     inMemoryOrdersMap.set(
       orderNumber,
@@ -974,106 +1147,141 @@ export const updateOrderStatus = async (
           paymentDetails,
 
         updated_at:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       }
     );
   }
 
+
+  /* -------------------------------------------------------
+     DATABASE
+     ------------------------------------------------------- */
+
   if (supabase) {
+
     const {
       error
-    } = await supabase
-      .from('orders')
-      .update({
-        status:
-          newStatus,
+    } =
+      await supabase
+        .from('orders')
+        .update({
+          status:
+            newStatus,
 
-        updated_at:
-          new Date().toISOString()
-      })
-      .eq(
-        'order_number',
-        orderNumber
-      );
+          updated_at:
+            new Date()
+              .toISOString()
+        })
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
 
     if (error) {
+
       console.error(
         'UPDATE ORDER STATUS ERROR:',
         error
       );
+
 
       throw error;
     }
   }
 };
 
-/**
- * ======================================================
- * STOCK MANAGEMENT
- * ======================================================
- *
+
+/* =========================================================
+   STOCK MANAGEMENT
+   ========================================================= */
+
+/*
  * mode:
  *
  * decrease = payment successful
  * increase = refund
  */
-export const adjustStockForOrder = async (
+
+export const adjustStockForOrder =
+async (
   env,
   orderNumber,
   mode = 'decrease'
 ) => {
+
   const supabase =
     getSupabaseClient(
       env
     );
 
+
   if (!supabase) {
+
     throw new Error(
       'Supabase unavailable'
     );
   }
 
-  /**
-   * ==================================================
-   * FIND ORDER
-   * ==================================================
-   */
+
+  if (
+    mode !==
+      'decrease' &&
+    mode !==
+      'increase'
+  ) {
+
+    throw new Error(
+      `Invalid stock mode '${mode}'`
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     FIND ORDER
+     ------------------------------------------------------- */
+
   const {
     data: order,
     error: orderError
-  } = await supabase
-    .from('orders')
-    .select(`
-      id,
-      order_number,
-      stock_processed,
-      stock_restored
-    `)
-    .eq(
-      'order_number',
-      orderNumber
-    )
-    .single();
+  } =
+    await supabase
+      .from('orders')
+      .select(`
+        id,
+        order_number,
+        stock_processed,
+        stock_restored
+      `)
+      .eq(
+        'order_number',
+        orderNumber
+      )
+      .maybeSingle();
+
 
   if (
     orderError ||
     !order
   ) {
+
     throw new Error(
       `Order '${orderNumber}' not found`
     );
   }
 
-  /**
-   * ==================================================
-   * PREVENT DOUBLE STOCK DEDUCTION
-   * ==================================================
-   */
+
+  /* -------------------------------------------------------
+     PREVENT DOUBLE DEDUCTION
+     ------------------------------------------------------- */
+
   if (
     mode ===
       'decrease' &&
     order.stock_processed
   ) {
+
     return {
       success:
         true,
@@ -1086,16 +1294,17 @@ export const adjustStockForOrder = async (
     };
   }
 
-  /**
-   * ==================================================
-   * PREVENT DOUBLE STOCK RESTORE
-   * ==================================================
-   */
+
+  /* -------------------------------------------------------
+     PREVENT DOUBLE RESTORE
+     ------------------------------------------------------- */
+
   if (
     mode ===
       'increase' &&
     order.stock_restored
   ) {
+
     return {
       success:
         true,
@@ -1108,204 +1317,251 @@ export const adjustStockForOrder = async (
     };
   }
 
-  /**
-   * ==================================================
-   * GET ORDER ITEMS
-   * ==================================================
-   */
+
+  /* -------------------------------------------------------
+     GET ORDER ITEMS
+     ------------------------------------------------------- */
+
   const {
     data: items,
     error: itemsError
-  } = await supabase
-    .from('order_items')
-    .select(
-      'product_id, quantity'
-    )
-    .eq(
-      'order_number',
-      orderNumber
-    );
+  } =
+    await supabase
+      .from('order_items')
+      .select(
+        'product_id, quantity'
+      )
+      .eq(
+        'order_number',
+        orderNumber
+      );
+
 
   if (itemsError) {
+
     throw itemsError;
   }
 
-  /**
-   * ==================================================
-   * UPDATE PRODUCT STOCK
-   * ==================================================
-   */
-  for (
-    const item of
-    items || []
+
+  if (
+    !items ||
+    items.length === 0
   ) {
+
+    throw new Error(
+      `No order items found for '${orderNumber}'`
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     UPDATE EACH PRODUCT
+     ------------------------------------------------------- */
+
+  for (
+    const item of items
+  ) {
+
     const productId =
       normalizeProductId(
         item.product_id
       );
 
+
     const {
       data: product,
       error: productError
-    } = await supabase
-      .from('products')
-      .select(
-        'id, stock'
-      )
-      .eq(
-        'id',
-        productId
-      )
-      .single();
+    } =
+      await supabase
+        .from('products')
+        .select(
+          'id, stock'
+        )
+        .eq(
+          'id',
+          productId
+        )
+        .maybeSingle();
+
 
     if (
       productError ||
       !product
     ) {
+
       throw new Error(
         `Product '${productId}' not found`
       );
     }
+
 
     const qty =
       Number(
         item.quantity
       );
 
+
     if (
-      !Number.isFinite(qty) ||
+      !Number.isFinite(
+        qty
+      ) ||
       qty <= 0
     ) {
+
       continue;
     }
+
 
     const currentStock =
       Number(
         product.stock
       );
 
+
     if (
       !Number.isFinite(
         currentStock
       )
     ) {
+
       throw new Error(
         `Invalid stock for '${productId}'`
       );
     }
 
+
     let newStock;
 
-    /**
-     * DECREASE
-     */
+
+    /* -----------------------------------------------------
+       DECREASE
+       ----------------------------------------------------- */
+
     if (
       mode ===
       'decrease'
     ) {
+
       if (
         currentStock <
         qty
       ) {
+
         throw new Error(
           `Stok tidak mencukupi untuk '${productId}'. Tersedia ${currentStock}, diminta ${qty}`
         );
       }
+
 
       newStock =
         currentStock -
         qty;
     }
 
-    /**
-     * INCREASE
-     */
+
+    /* -----------------------------------------------------
+       INCREASE
+       ----------------------------------------------------- */
+
     else {
+
       newStock =
         currentStock +
         qty;
     }
 
-    /**
-     * UPDATE PRODUCT
-     */
+
     const {
       error: updateStockError
-    } = await supabase
-      .from('products')
-      .update({
-        stock:
-          newStock
-      })
-      .eq(
-        'id',
-        productId
-      );
+    } =
+      await supabase
+        .from('products')
+        .update({
+          stock:
+            newStock
+        })
+        .eq(
+          'id',
+          productId
+        );
+
 
     if (updateStockError) {
+
       throw updateStockError;
     }
   }
 
-  /**
-   * ==================================================
-   * MARK STOCK AS PROCESSED
-   * ==================================================
-   */
+
+  /* -------------------------------------------------------
+     MARK STOCK PROCESSED
+     ------------------------------------------------------- */
+
   if (
     mode ===
     'decrease'
   ) {
+
     const {
       error
-    } = await supabase
-      .from('orders')
-      .update({
-        stock_processed:
-          true
-      })
-      .eq(
-        'order_number',
-        orderNumber
-      );
+    } =
+      await supabase
+        .from('orders')
+        .update({
+          stock_processed:
+            true
+        })
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
 
     if (error) {
       throw error;
     }
   }
 
-  /**
-   * ==================================================
-   * MARK STOCK AS RESTORED
-   * ==================================================
-   */
+
+  /* -------------------------------------------------------
+     MARK STOCK RESTORED
+     ------------------------------------------------------- */
+
   if (
     mode ===
     'increase'
   ) {
+
     const {
       error
-    } = await supabase
-      .from('orders')
-      .update({
-        stock_restored:
-          true
-      })
-      .eq(
-        'order_number',
-        orderNumber
-      );
+    } =
+      await supabase
+        .from('orders')
+        .update({
+          stock_restored:
+            true
+        })
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
 
     if (error) {
       throw error;
     }
   }
+
 
   return {
     success:
       true,
 
     skipped:
-      false
+      false,
+
+    mode,
+    order_number:
+      orderNumber
   };
 };
