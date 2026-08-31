@@ -2053,6 +2053,914 @@ async (c) => {
 
 
 /* =========================================================
+   PUBLIC ORDER STATUS
+   GET /api/order-status/:orderNumber
+   ========================================================= */
+
+/*
+ * Endpoint ini sengaja hanya mengembalikan
+ * data status yang aman ditampilkan ke customer.
+ *
+ * Tidak mengembalikan:
+ * email
+ * phone
+ * alamat
+ * koordinat
+ * payment raw data
+ */
+
+export const getPublicOrderStatus =
+async (c) => {
+
+  try {
+
+    const orderNumber =
+      String(
+        c.req.param(
+          'orderNumber'
+        ) ||
+        ''
+      ).trim();
+
+
+    if (
+      !orderNumber
+    ) {
+
+      return errorResponse(
+        c,
+        'Order number is required',
+        null,
+        400
+      );
+    }
+
+
+    const supabase =
+      getSupabaseClient(
+        c.env
+      );
+
+
+    if (
+      !supabase
+    ) {
+
+      return errorResponse(
+        c,
+        'Database unavailable',
+        'Supabase connection unavailable',
+        503
+      );
+    }
+
+
+    const {
+      data:
+        order,
+
+      error:
+        orderError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .select(`
+          order_number,
+          status,
+          subtotal_amount,
+          shipping_fee,
+          total_amount,
+          delivery_type,
+          created_at,
+          paid_at,
+          updated_at
+        `)
+        .eq(
+          'order_number',
+          orderNumber
+        )
+        .maybeSingle();
+
+
+    if (
+      orderError
+    ) {
+
+      console.error(
+        'PUBLIC ORDER STATUS ERROR:',
+        orderError
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to load order status',
+        orderError.message,
+        500
+      );
+    }
+
+
+    if (
+      !order
+    ) {
+
+      return errorResponse(
+        c,
+        'Order not found',
+        `Order '${orderNumber}' does not exist`,
+        404
+      );
+    }
+
+
+    const status =
+      String(
+        order.status ||
+        'pending'
+      )
+        .trim()
+        .toLowerCase();
+
+
+    return successResponse(
+      c,
+      {
+        order_number:
+          order.order_number,
+
+        status,
+
+        status_label:
+          getOrderStatusLabel(
+            status
+          ),
+
+        subtotal_amount:
+          Number(
+            order.subtotal_amount ??
+            0
+          ),
+
+        shipping_fee:
+          Number(
+            order.shipping_fee ??
+            0
+          ),
+
+        total_amount:
+          Number(
+            order.total_amount ??
+            0
+          ),
+
+        delivery_type:
+          order.delivery_type ||
+          'pickup',
+
+        created_at:
+          order.created_at ||
+          null,
+
+        paid_at:
+          order.paid_at ||
+          null,
+
+        updated_at:
+          order.updated_at ||
+          null
+      },
+      'Order status retrieved successfully'
+    );
+
+
+  } catch (
+    err
+  ) {
+
+    console.error(
+      'Get Public Order Status Error:',
+      err
+    );
+
+
+    return errorResponse(
+      c,
+      'Failed to load order status',
+      err?.message ||
+      err,
+      500
+    );
+  }
+};
+
+
+/* =========================================================
+   ADMIN - GET ORDERS
+   GET /api/admin/orders
+   ========================================================= */
+
+export const getAdminOrders =
+async (c) => {
+
+  try {
+
+    /* -----------------------------------------------------
+       ADMIN AUTH
+       ----------------------------------------------------- */
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       SUPABASE
+       ----------------------------------------------------- */
+
+    const supabase =
+      getSupabaseClient(
+        c.env
+      );
+
+
+    if (
+      !supabase
+    ) {
+
+      return errorResponse(
+        c,
+        'Database unavailable',
+        'Supabase connection unavailable',
+        503
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       LOAD ORDERS
+       ----------------------------------------------------- */
+
+    const {
+      data:
+        orders,
+
+      error:
+        ordersError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .select(`
+          id,
+          checkout_id,
+          order_number,
+          customer_name,
+          customer_email,
+          customer_phone,
+          subtotal_amount,
+          shipping_fee,
+          total_amount,
+          delivery_type,
+          delivery_address,
+          delivery_distance_km,
+          status,
+          notes,
+          payment_provider,
+          payment_method,
+          payment_id,
+          payment_url,
+          paid_at,
+          stock_processed,
+          stock_restored,
+          created_at,
+          updated_at
+        `)
+        .order(
+          'created_at',
+          {
+            ascending:
+              false
+          }
+        )
+        .limit(
+          100
+        );
+
+
+    if (
+      ordersError
+    ) {
+
+      console.error(
+        'ADMIN ORDERS ERROR:',
+        ordersError
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to load orders',
+        ordersError.message,
+        500
+      );
+    }
+
+
+    const safeOrders =
+      Array.isArray(
+        orders
+      )
+        ? orders
+        : [];
+
+
+    /* -----------------------------------------------------
+       NO ORDERS
+       ----------------------------------------------------- */
+
+    if (
+      safeOrders.length ===
+      0
+    ) {
+
+      return successResponse(
+        c,
+        {
+          orders:
+            []
+        },
+        'Orders loaded successfully'
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       LOAD ORDER ITEMS
+       ----------------------------------------------------- */
+
+    const orderNumbers =
+      safeOrders
+        .map(
+          order =>
+            order.order_number
+        )
+        .filter(
+          Boolean
+        );
+
+
+    let allItems =
+      [];
+
+
+    if (
+      orderNumbers.length >
+      0
+    ) {
+
+      const {
+        data:
+          items,
+
+        error:
+          itemsError
+      } =
+        await supabase
+          .from(
+            'order_items'
+          )
+          .select(`
+            id,
+            order_id,
+            order_number,
+            product_id,
+            product_name,
+            price,
+            quantity,
+            subtotal
+          `)
+          .in(
+            'order_number',
+            orderNumbers
+          );
+
+
+      if (
+        itemsError
+      ) {
+
+        console.error(
+          'ADMIN ORDER ITEMS ERROR:',
+          itemsError
+        );
+
+      } else {
+
+        allItems =
+          Array.isArray(
+            items
+          )
+            ? items
+            : [];
+      }
+    }
+
+
+    /* -----------------------------------------------------
+       MERGE ITEMS
+       ----------------------------------------------------- */
+
+    const result =
+      safeOrders.map(
+        order => {
+
+          const orderItems =
+            allItems.filter(
+              item =>
+                item.order_number ===
+                order.order_number
+            );
+
+
+          const status =
+            String(
+              order.status ||
+              'pending'
+            )
+              .trim()
+              .toLowerCase();
+
+
+          return {
+            ...order,
+
+            subtotal_amount:
+              Number(
+                order.subtotal_amount ??
+                0
+              ),
+
+            shipping_fee:
+              Number(
+                order.shipping_fee ??
+                0
+              ),
+
+            total_amount:
+              Number(
+                order.total_amount ??
+                0
+              ),
+
+            delivery_distance_km:
+              order.delivery_distance_km !==
+              null
+                ? Number(
+                    order.delivery_distance_km
+                  )
+                : null,
+
+            status,
+
+            status_label:
+              getOrderStatusLabel(
+                status
+              ),
+
+            items:
+              orderItems
+          };
+        }
+      );
+
+
+    return successResponse(
+      c,
+      {
+        orders:
+          result
+      },
+      'Orders loaded successfully'
+    );
+
+
+  } catch (
+    err
+  ) {
+
+    console.error(
+      'Get Admin Orders Error:',
+      err
+    );
+
+
+    return errorResponse(
+      c,
+      'Failed to load orders',
+      err?.message ||
+      err,
+      500
+    );
+  }
+};
+
+
+/* =========================================================
+   ADMIN - UPDATE ORDER STATUS
+   PATCH /api/admin/orders/:orderNumber/status
+   ========================================================= */
+
+export const updateAdminOrderStatus =
+async (c) => {
+
+  try {
+
+    /* -----------------------------------------------------
+       ADMIN AUTH
+       ----------------------------------------------------- */
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       ORDER NUMBER
+       ----------------------------------------------------- */
+
+    const orderNumber =
+      String(
+        c.req.param(
+          'orderNumber'
+        ) ||
+        ''
+      ).trim();
+
+
+    if (
+      !orderNumber
+    ) {
+
+      return errorResponse(
+        c,
+        'Order number is required',
+        null,
+        400
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       BODY
+       ----------------------------------------------------- */
+
+    const body =
+      await c.req
+        .json()
+        .catch(
+          () => ({})
+        );
+
+
+    const status =
+      String(
+        body?.status ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+
+
+    /* -----------------------------------------------------
+       STATUS VALIDATION
+       ----------------------------------------------------- */
+
+    if (
+      !ADMIN_ALLOWED_ORDER_STATUSES.has(
+        status
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Invalid order status',
+        `Status '${status}' is not allowed`,
+        400
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       SUPABASE
+       ----------------------------------------------------- */
+
+    const supabase =
+      getSupabaseClient(
+        c.env
+      );
+
+
+    if (
+      !supabase
+    ) {
+
+      return errorResponse(
+        c,
+        'Database unavailable',
+        'Supabase connection unavailable',
+        503
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       FIND ORDER
+       ----------------------------------------------------- */
+
+    const {
+      data:
+        currentOrder,
+
+      error:
+        lookupError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .select(`
+          id,
+          order_number,
+          status,
+          paid_at,
+          total_amount,
+          customer_name,
+          delivery_type
+        `)
+        .eq(
+          'order_number',
+          orderNumber
+        )
+        .maybeSingle();
+
+
+    if (
+      lookupError
+    ) {
+
+      console.error(
+        'ADMIN ORDER LOOKUP ERROR:',
+        lookupError
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to find order',
+        lookupError.message,
+        500
+      );
+    }
+
+
+    if (
+      !currentOrder
+    ) {
+
+      return errorResponse(
+        c,
+        'Order not found',
+        `Order '${orderNumber}' does not exist`,
+        404
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       IMPORTANT SECURITY
+
+       Jangan sampai admin secara tidak sengaja
+       menandai order pending sebagai ready/completed
+       padahal belum dibayar.
+       ----------------------------------------------------- */
+
+    if (
+      (
+        status ===
+          'ready' ||
+        status ===
+          'completed'
+      ) &&
+      (
+        currentOrder.status ===
+          'pending' ||
+        currentOrder.status ===
+          'failed'
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Order has not been paid',
+        'Only paid orders can be marked ready or completed',
+        400
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       IDEMPOTENT STATUS
+       ----------------------------------------------------- */
+
+    if (
+      currentOrder.status ===
+      status
+    ) {
+
+      return successResponse(
+        c,
+        {
+          order_number:
+            currentOrder.order_number,
+
+          status,
+
+          status_label:
+            getOrderStatusLabel(
+              status
+            ),
+
+          idempotent:
+            true
+        },
+        'Order status already updated'
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       UPDATE
+       ----------------------------------------------------- */
+
+    const now =
+      new Date()
+        .toISOString();
+
+
+    const {
+      data:
+        updatedOrder,
+
+      error:
+        updateError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .update({
+          status,
+
+          updated_at:
+            now
+        })
+        .eq(
+          'id',
+          currentOrder.id
+        )
+        .select(`
+          id,
+          order_number,
+          customer_name,
+          total_amount,
+          delivery_type,
+          status,
+          paid_at,
+          created_at,
+          updated_at
+        `)
+        .single();
+
+
+    if (
+      updateError
+    ) {
+
+      console.error(
+        'ADMIN STATUS UPDATE ERROR:',
+        updateError
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to update order status',
+        updateError.message,
+        500
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       MEMORY FALLBACK SYNC
+       ----------------------------------------------------- */
+
+    if (
+      inMemoryOrdersMap.has(
+        orderNumber
+      )
+    ) {
+
+      const memoryOrder =
+        inMemoryOrdersMap.get(
+          orderNumber
+        );
+
+
+      inMemoryOrdersMap.set(
+        orderNumber,
+        {
+          ...memoryOrder,
+
+          status,
+
+          updated_at:
+            now
+        }
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       RESPONSE
+       ----------------------------------------------------- */
+
+    return successResponse(
+      c,
+      {
+        ...updatedOrder,
+
+        total_amount:
+          Number(
+            updatedOrder.total_amount ??
+            0
+          ),
+
+        status_label:
+          getOrderStatusLabel(
+            status
+          )
+      },
+      'Order status updated successfully'
+    );
+
+
+  } catch (
+    err
+  ) {
+
+    console.error(
+      'Update Admin Order Status Error:',
+      err
+    );
+
+
+    return errorResponse(
+      c,
+      'Failed to update order status',
+      err?.message ||
+      err,
+      500
+    );
+  }
+};
+
+
+/* =========================================================
    UPDATE ORDER STATUS
    ========================================================= */
 
