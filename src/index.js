@@ -16,7 +16,8 @@ import {
   getOrderByNumber,
   getPublicOrderStatus,
   getAdminOrders,
-  updateAdminOrderStatus
+  updateAdminOrderStatus,
+  deleteAdminOrder
 } from './controllers/orders.js';
 
 import {
@@ -26,120 +27,105 @@ import {
 } from './controllers/payment.js';
 
 
-const app = new Hono();
+const app =
+  new Hono();
 
 
 /* =========================================================
    ADMIN HELPERS
    ========================================================= */
 
-const isAdminAuthorized = (c) => {
+const isAdminAuthorized =
+(c) => {
 
   const configuredSecret =
-    c.env?.ADMIN_SECRET || '';
+    c.env?.ADMIN_SECRET ||
+    '';
 
   const providedSecret =
     c.req.header(
       'X-ADMIN-SECRET'
-    ) || '';
+    ) ||
+    '';
 
 
   return Boolean(
-
     configuredSecret &&
-
     providedSecret &&
-
     configuredSecret ===
       providedSecret
-
   );
 };
 
 
 const getSupabaseHeaders =
-  (env) => ({
+(env) => ({
 
-    apikey:
-      env.SUPABASE_SERVICE_ROLE_KEY,
+  apikey:
+    env.SUPABASE_SERVICE_ROLE_KEY,
 
-    Authorization:
-      `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+  Authorization:
+    `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
 
-    'Content-Type':
-      'application/json'
+  'Content-Type':
+    'application/json'
 
-  });
+});
 
 
 const ensureAdminEnvironment =
-  (c) => {
+(c) => {
 
-    if (
-      !c.env?.SUPABASE_URL ||
-      !c.env?.SUPABASE_SERVICE_ROLE_KEY
-    ) {
+  if (
+    !c.env?.SUPABASE_URL ||
+    !c.env?.SUPABASE_SERVICE_ROLE_KEY
+  ) {
 
-      return errorResponse(
-
-        c,
-
-        'Supabase configuration missing',
-
-        'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured',
-
-        500
-
-      );
-    }
+    return errorResponse(
+      c,
+      'Supabase configuration missing',
+      'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured',
+      500
+    );
+  }
 
 
-    if (
-      !c.env?.ADMIN_SECRET
-    ) {
+  if (
+    !c.env?.ADMIN_SECRET
+  ) {
 
-      return errorResponse(
-
-        c,
-
-        'Admin configuration missing',
-
-        'ADMIN_SECRET is not configured',
-
-        500
-
-      );
-    }
+    return errorResponse(
+      c,
+      'Admin configuration missing',
+      'ADMIN_SECRET is not configured',
+      500
+    );
+  }
 
 
-    return null;
-  };
+  return null;
+};
 
 
 const ensureSupabaseEnvironment =
-  (c) => {
+(c) => {
 
-    if (
-      !c.env?.SUPABASE_URL ||
-      !c.env?.SUPABASE_SERVICE_ROLE_KEY
-    ) {
+  if (
+    !c.env?.SUPABASE_URL ||
+    !c.env?.SUPABASE_SERVICE_ROLE_KEY
+  ) {
 
-      return errorResponse(
-
-        c,
-
-        'Supabase configuration missing',
-
-        'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured',
-
-        500
-
-      );
-    }
+    return errorResponse(
+      c,
+      'Supabase configuration missing',
+      'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured',
+      500
+    );
+  }
 
 
-    return null;
-  };
+  return null;
+};
 
 
 /* =========================================================
@@ -150,97 +136,80 @@ app.use(
   '*',
   cors({
 
-    origin: (origin) => {
-
-      /*
-       * Server-to-server request seperti webhook Xendit
-       * biasanya tidak membawa Origin.
-       */
-
-      if (
-        !origin
-      ) {
-
-        return '*';
-      }
-
-
-      const allowedOrigins = [
+    origin:
+      (origin) => {
 
         /*
-         * Production
+         * Webhook / server-to-server
+         * biasanya tidak membawa Origin.
          */
 
-        'https://arumeya.com',
-        'https://www.arumeya.com',
+        if (
+          !origin
+        ) {
 
-        /*
-         * Netlify fallback / preview
-         */
-
-        'https://arumeproject2.netlify.app',
-        'https://arume-coffee.netlify.app',
-
-        /*
-         * Local development
-         */
-
-        'http://localhost:5173',
-        'http://localhost:3000',
-        'http://127.0.0.1:5173'
-
-      ];
+          return '*';
+        }
 
 
-      if (
+        const allowedOrigins = [
 
-        allowedOrigins.includes(
-          origin
-        ) ||
+          'https://arumeya.com',
+          'https://www.arumeya.com',
 
-        origin.endsWith(
-          '.netlify.app'
-        ) ||
+          'https://arumeproject2.netlify.app',
+          'https://arume-coffee.netlify.app',
 
-        origin.includes(
-          'localhost'
-        ) ||
+          'http://localhost:5173',
+          'http://localhost:3000',
+          'http://127.0.0.1:5173'
 
-        origin.includes(
-          '127.0.0.1'
-        )
-
-      ) {
-
-        return origin;
-      }
+        ];
 
 
-      return null;
-    },
+        if (
+          allowedOrigins.includes(
+            origin
+          ) ||
+
+          origin.endsWith(
+            '.netlify.app'
+          ) ||
+
+          origin.includes(
+            'localhost'
+          ) ||
+
+          origin.includes(
+            '127.0.0.1'
+          )
+        ) {
+
+          return origin;
+        }
+
+
+        return null;
+      },
 
 
     allowMethods: [
-
       'GET',
       'POST',
       'PUT',
       'PATCH',
       'DELETE',
       'OPTIONS'
-
     ],
 
 
     allowHeaders: [
-
       'Content-Type',
       'Authorization',
       'X-Requested-With',
       'Accept',
       'X-CALLBACK-TOKEN',
       'X-ADMIN-SECRET'
-
     ],
 
 
@@ -286,54 +255,40 @@ app.get(
 
     const isXenditConfigured =
       Boolean(
-
         c.env?.XENDIT_SECRET_KEY &&
-
         c.env.XENDIT_SECRET_KEY
           .trim()
           .length > 0
-
       );
 
 
     const isXenditWebhookConfigured =
       Boolean(
-
         c.env?.XENDIT_WEBHOOK_TOKEN &&
-
         c.env.XENDIT_WEBHOOK_TOKEN
           .trim()
           .length > 0
-
       );
 
 
     const isSupabaseConfigured =
       Boolean(
-
         c.env?.SUPABASE_URL &&
-
         c.env?.SUPABASE_SERVICE_ROLE_KEY
-
       );
 
 
     const isAdminConfigured =
       Boolean(
-
         c.env?.ADMIN_SECRET &&
-
         c.env.ADMIN_SECRET
           .trim()
           .length > 0
-
       );
 
 
     return successResponse(
-
       c,
-
       {
 
         status:
@@ -368,12 +323,16 @@ app.get(
           true,
 
         order_status_api:
+          true,
+
+        admin_orders_api:
+          true,
+
+        delete_pending_order_api:
           true
 
       },
-
       'Arume Coffee API is running and healthy'
-
     );
   }
 );
@@ -424,15 +383,10 @@ app.get(
     ) {
 
       return errorResponse(
-
         c,
-
         'Unauthorized',
-
         'Invalid admin secret',
-
         401
-
       );
     }
 
@@ -448,9 +402,7 @@ app.get(
 
       const response =
         await fetch(
-
           `${supabaseUrl}/rest/v1/products?select=id,name,price,stock,image_url,category&order=name.asc`,
-
           {
 
             method:
@@ -462,7 +414,6 @@ app.get(
               )
 
           }
-
         );
 
 
@@ -481,24 +432,17 @@ app.get(
 
 
         return errorResponse(
-
           c,
-
           'Failed to load products',
-
           data?.message ||
             'Supabase request failed',
-
           response.status
-
         );
       }
 
 
       return successResponse(
-
         c,
-
         {
 
           products:
@@ -509,10 +453,9 @@ app.get(
               : []
 
         },
-
         'Admin products loaded successfully'
-
       );
+
 
     } catch (
       err
@@ -525,16 +468,11 @@ app.get(
 
 
       return errorResponse(
-
         c,
-
         'Failed to load products',
-
         err?.message ||
           'An unexpected error occurred',
-
         500
-
       );
     }
   }
@@ -570,15 +508,10 @@ app.patch(
     ) {
 
       return errorResponse(
-
         c,
-
         'Unauthorized',
-
         'Invalid admin secret',
-
         401
-
       );
     }
 
@@ -602,25 +535,17 @@ app.patch(
 
 
       if (
-
         !Number.isInteger(
           stock
         ) ||
-
         stock < 0
-
       ) {
 
         return errorResponse(
-
           c,
-
           'Invalid stock',
-
           'Stock must be an integer greater than or equal to 0',
-
           400
-
         );
       }
 
@@ -634,9 +559,9 @@ app.patch(
 
       const response =
         await fetch(
-
-          `${supabaseUrl}/rest/v1/products?id=eq.${encodeURIComponent(productId)}`,
-
+          `${supabaseUrl}/rest/v1/products?id=eq.${encodeURIComponent(
+            productId
+          )}`,
           {
 
             method:
@@ -659,7 +584,6 @@ app.patch(
               })
 
           }
-
         );
 
 
@@ -678,58 +602,41 @@ app.patch(
 
 
         return errorResponse(
-
           c,
-
           'Failed to update stock',
-
           data?.message ||
             'Supabase request failed',
-
           response.status
-
         );
       }
 
 
       if (
-
         !Array.isArray(
           data
         ) ||
-
-        data.length === 0
-
+        data.length ===
+          0
       ) {
 
         return errorResponse(
-
           c,
-
           'Product not found',
-
           `Product '${productId}' was not found`,
-
           404
-
         );
       }
 
 
       return successResponse(
-
         c,
-
         {
-
           product:
             data[0]
-
         },
-
         'Stock updated successfully'
-
       );
+
 
     } catch (
       err
@@ -742,16 +649,11 @@ app.patch(
 
 
       return errorResponse(
-
         c,
-
         'Failed to update stock',
-
         err?.message ||
           'An unexpected error occurred',
-
         500
-
       );
     }
   }
@@ -791,9 +693,7 @@ app.get(
 
       const response =
         await fetch(
-
           `${supabaseUrl}/rest/v1/shipping_settings?select=id,min_distance,max_distance,fee,active&active=eq.true&order=max_distance.asc`,
-
           {
 
             method:
@@ -805,7 +705,6 @@ app.get(
               )
 
           }
-
         );
 
 
@@ -824,24 +723,17 @@ app.get(
 
 
         return errorResponse(
-
           c,
-
           'Failed to load shipping rates',
-
           data?.message ||
             'Supabase request failed',
-
           response.status
-
         );
       }
 
 
       return successResponse(
-
         c,
-
         {
 
           shipping_rates:
@@ -852,10 +744,9 @@ app.get(
               : []
 
         },
-
         'Shipping rates loaded successfully'
-
       );
+
 
     } catch (
       err
@@ -868,16 +759,11 @@ app.get(
 
 
       return errorResponse(
-
         c,
-
         'Failed to load shipping rates',
-
         err?.message ||
           'An unexpected error occurred',
-
         500
-
       );
     }
   }
@@ -913,15 +799,10 @@ app.get(
     ) {
 
       return errorResponse(
-
         c,
-
         'Unauthorized',
-
         'Invalid admin secret',
-
         401
-
       );
     }
 
@@ -937,9 +818,7 @@ app.get(
 
       const response =
         await fetch(
-
           `${supabaseUrl}/rest/v1/shipping_settings?select=id,min_distance,max_distance,fee,active,created_at&order=max_distance.asc`,
-
           {
 
             method:
@@ -951,7 +830,6 @@ app.get(
               )
 
           }
-
         );
 
 
@@ -970,24 +848,17 @@ app.get(
 
 
         return errorResponse(
-
           c,
-
           'Failed to load shipping settings',
-
           data?.message ||
             'Supabase request failed',
-
           response.status
-
         );
       }
 
 
       return successResponse(
-
         c,
-
         {
 
           shipping_rates:
@@ -998,10 +869,9 @@ app.get(
               : []
 
         },
-
         'Admin shipping settings loaded successfully'
-
       );
+
 
     } catch (
       err
@@ -1014,16 +884,11 @@ app.get(
 
 
       return errorResponse(
-
         c,
-
         'Failed to load shipping settings',
-
         err?.message ||
           'An unexpected error occurred',
-
         500
-
       );
     }
   }
@@ -1059,15 +924,10 @@ app.put(
     ) {
 
       return errorResponse(
-
         c,
-
         'Unauthorized',
-
         'Invalid admin secret',
-
         401
-
       );
     }
 
@@ -1103,7 +963,8 @@ app.put(
 
 
       const active =
-        body?.active === undefined
+        body?.active ===
+          undefined
           ? true
           : Boolean(
               body.active
@@ -1111,49 +972,33 @@ app.put(
 
 
       if (
-
         !Number.isFinite(
           minDistance
         ) ||
-
         minDistance < 0
-
       ) {
 
         return errorResponse(
-
           c,
-
           'Invalid minimum distance',
-
           'min_distance must be a number greater than or equal to 0',
-
           400
-
         );
       }
 
 
       if (
-
         !Number.isFinite(
           maxDistance
         ) ||
-
         maxDistance <= 0
-
       ) {
 
         return errorResponse(
-
           c,
-
           'Invalid maximum distance',
-
           'max_distance must be greater than 0',
-
           400
-
         );
       }
 
@@ -1164,39 +1009,26 @@ app.put(
       ) {
 
         return errorResponse(
-
           c,
-
           'Invalid distance range',
-
           'max_distance must be greater than min_distance',
-
           400
-
         );
       }
 
 
       if (
-
         !Number.isInteger(
           fee
         ) ||
-
         fee < 0
-
       ) {
 
         return errorResponse(
-
           c,
-
           'Invalid shipping fee',
-
           'fee must be an integer greater than or equal to 0',
-
           400
-
         );
       }
 
@@ -1210,9 +1042,9 @@ app.put(
 
       const response =
         await fetch(
-
-          `${supabaseUrl}/rest/v1/shipping_settings?id=eq.${encodeURIComponent(shippingId)}`,
-
+          `${supabaseUrl}/rest/v1/shipping_settings?id=eq.${encodeURIComponent(
+            shippingId
+          )}`,
           {
 
             method:
@@ -1245,7 +1077,6 @@ app.put(
               })
 
           }
-
         );
 
 
@@ -1264,58 +1095,41 @@ app.put(
 
 
         return errorResponse(
-
           c,
-
           'Failed to update shipping rate',
-
           data?.message ||
             'Supabase request failed',
-
           response.status
-
         );
       }
 
 
       if (
-
         !Array.isArray(
           data
         ) ||
-
-        data.length === 0
-
+        data.length ===
+          0
       ) {
 
         return errorResponse(
-
           c,
-
           'Shipping rate not found',
-
           `Shipping rate '${shippingId}' was not found`,
-
           404
-
         );
       }
 
 
       return successResponse(
-
         c,
-
         {
-
           shipping_rate:
             data[0]
-
         },
-
         'Shipping rate updated successfully'
-
       );
+
 
     } catch (
       err
@@ -1328,16 +1142,11 @@ app.put(
 
 
       return errorResponse(
-
         c,
-
         'Failed to update shipping rate',
-
         err?.message ||
           'An unexpected error occurred',
-
         500
-
       );
     }
   }
@@ -1373,15 +1182,6 @@ app.get(
    PUBLIC CUSTOMER ORDER STATUS
    --------------------------------------------------------- */
 
-/*
- * Endpoint customer.
- *
- * Contoh:
- *
- * GET
- * /api/order-status/ARC-123456789-1234
- */
-
 app.get(
   '/api/order-status/:orderNumber',
   getPublicOrderStatus
@@ -1392,13 +1192,10 @@ app.get(
    ADMIN ORDER ROUTES
    ========================================================= */
 
-/*
- * GET SEMUA PESANAN
- *
- * Header:
- *
- * X-ADMIN-SECRET: password-admin
- */
+
+/* ---------------------------------------------------------
+   GET ALL ADMIN ORDERS
+   --------------------------------------------------------- */
 
 app.get(
   '/api/admin/orders',
@@ -1406,26 +1203,35 @@ app.get(
 );
 
 
+/* ---------------------------------------------------------
+   UPDATE ORDER STATUS
+   --------------------------------------------------------- */
+
+app.patch(
+  '/api/admin/orders/:orderNumber/status',
+  updateAdminOrderStatus
+);
+
+
+/* ---------------------------------------------------------
+   DELETE PENDING / FAILED ORDER
+   --------------------------------------------------------- */
+
 /*
- * UPDATE STATUS PESANAN
+ * DELETE
  *
- * PATCH
- * /api/admin/orders/:orderNumber/status
+ * /api/admin/orders/:orderNumber
  *
  * Header:
  *
  * X-ADMIN-SECRET: password-admin
  *
- * Body:
- *
- * {
- *   "status": "ready"
- * }
+ * Hanya pending / failed yang boleh dihapus.
  */
 
-app.patch(
-  '/api/admin/orders/:orderNumber/status',
-  updateAdminOrderStatus
+app.delete(
+  '/api/admin/orders/:orderNumber',
+  deleteAdminOrder
 );
 
 
@@ -1462,19 +1268,17 @@ app.get(
     const acceptHeader =
       c.req.header(
         'accept'
-      ) || '';
+      ) ||
+      '';
 
 
     if (
-
       acceptHeader.includes(
         'application/json'
       ) &&
-
       !acceptHeader.includes(
         'text/html'
       )
-
     ) {
 
       return c.json({
@@ -1489,7 +1293,7 @@ app.get(
           'Hono',
 
         version:
-          '1.4.0',
+          '1.5.0',
 
         payment_gateway:
           'Xendit',
@@ -1498,6 +1302,12 @@ app.get(
           true,
 
         order_status:
+          true,
+
+        admin_orders:
+          true,
+
+        delete_pending_orders:
           true,
 
         documentation:
@@ -1509,47 +1319,35 @@ app.get(
 
     const isXenditConfigured =
       Boolean(
-
         c.env?.XENDIT_SECRET_KEY &&
-
         c.env.XENDIT_SECRET_KEY
           .trim()
           .length > 0
-
       );
 
 
     const isXenditWebhookConfigured =
       Boolean(
-
         c.env?.XENDIT_WEBHOOK_TOKEN &&
-
         c.env.XENDIT_WEBHOOK_TOKEN
           .trim()
           .length > 0
-
       );
 
 
     const isSupabaseConfigured =
       Boolean(
-
         c.env?.SUPABASE_URL &&
-
         c.env?.SUPABASE_SERVICE_ROLE_KEY
-
       );
 
 
     const isAdminConfigured =
       Boolean(
-
         c.env?.ADMIN_SECRET &&
-
         c.env.ADMIN_SECRET
           .trim()
           .length > 0
-
       );
 
 
@@ -1568,9 +1366,7 @@ app.get(
 
 <head>
 
-  <meta
-    charset="UTF-8"
-  />
+  <meta charset="UTF-8" />
 
   <meta
     name="viewport"
@@ -1618,14 +1414,6 @@ app.get(
       shadow-2xl
       overflow-hidden
     "
-
-    style="
-      font-family:
-      'Helvetica Neue',
-      Helvetica,
-      Arial,
-      sans-serif;
-    "
   >
 
 
@@ -1640,20 +1428,10 @@ app.get(
         py-4
         border-b
         border-[#141414]
-        bg-[#E4E3E0]
       "
     >
 
-      <div
-        class="
-          flex
-          items-center
-          gap-3
-          sm:gap-4
-          mb-2
-          sm:mb-0
-        "
-      >
+      <div>
 
         <div
           class="
@@ -1661,27 +1439,24 @@ app.get(
             text-[#E4E3E0]
             px-3
             py-1
+            inline-block
             font-mono
             text-xs
-            sm:text-sm
             font-bold
-            tracking-tighter
           "
         >
           ARUME_API_V1
         </div>
 
-
         <h1
           class="
             font-serif
             italic
-            text-lg
-            sm:text-xl
-            font-medium
+            text-xl
+            mt-2
           "
         >
-          Control Center // Edge-Node-01
+          Control Center
         </h1>
 
       </div>
@@ -1691,42 +1466,30 @@ app.get(
         class="
           flex
           items-center
-          gap-4
-          sm:gap-6
-          text-[10px]
-          sm:text-xs
+          gap-2
         "
       >
 
         <div
           class="
-            flex
-            items-center
-            gap-2
+            w-2.5
+            h-2.5
+            rounded-full
+            bg-green-600
+            animate-pulse
+          "
+        ></div>
+
+        <span
+          class="
+            uppercase
+            font-bold
+            tracking-widest
+            text-xs
           "
         >
-
-          <div
-            class="
-              w-2.5
-              h-2.5
-              rounded-full
-              bg-green-600
-              animate-pulse
-            "
-          ></div>
-
-          <span
-            class="
-              uppercase
-              font-bold
-              tracking-widest
-            "
-          >
-            Status: Live
-          </span>
-
-        </div>
+          Live
+        </span>
 
       </div>
 
@@ -1757,17 +1520,9 @@ app.get(
       >
 
         <p>
-          Target Worker:
+          Worker:
           <strong>
             arume-coffee-api-2
-          </strong>
-        </p>
-
-
-        <p>
-          Payment Gateway:
-          <strong>
-            Xendit
           </strong>
         </p>
 
@@ -1837,7 +1592,15 @@ app.get(
 
 
         <p>
-          Admin Orders API:
+          Admin Orders:
+          <strong>
+            Enabled
+          </strong>
+        </p>
+
+
+        <p>
+          Delete Pending Orders:
           <strong>
             Enabled
           </strong>
@@ -1851,42 +1614,6 @@ app.get(
           </strong>
         </p>
 
-
-        <p>
-          Production Domain:
-          <strong>
-            https://arumeya.com
-          </strong>
-        </p>
-
-      </div>
-
-
-      <div
-        class="
-          mt-8
-          pt-6
-          border-t
-          border-[#141414]
-        "
-      >
-
-        <p
-          class="
-            font-mono
-            text-xs
-            uppercase
-            tracking-wider
-          "
-        >
-          Cloudflare Workers //
-          Supabase //
-          Xendit //
-          Admin Stock API //
-          Shipping API //
-          Order Status API //
-          Admin Orders API
-        </p>
 
       </div>
 
@@ -1915,15 +1642,10 @@ app.notFound(
   (c) => {
 
     return errorResponse(
-
       c,
-
       'Endpoint not found',
-
       `Path '${c.req.path}' was not found on this server`,
-
       404
-
     );
   }
 );
@@ -1943,16 +1665,11 @@ app.onError(
 
 
     return errorResponse(
-
       c,
-
       'Internal Server Error',
-
       err?.message ||
         'An unexpected error occurred',
-
       500
-
     );
   }
 );
