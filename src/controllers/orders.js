@@ -115,37 +115,24 @@ const getOrderStatusLabel =
   ) {
 
     case 'pending':
-
       return 'Menunggu Pembayaran';
 
-
     case 'paid':
-
       return 'Pesanan Sedang Disiapkan';
 
-
     case 'ready':
-
       return 'Pesanan Sudah Siap';
 
-
     case 'completed':
-
       return 'Pesanan Selesai';
 
-
     case 'failed':
-
       return 'Pembayaran Gagal';
 
-
     case 'refunded':
-
       return 'Pembayaran Dikembalikan';
 
-
     default:
-
       return 'Status Pesanan';
   }
 };
@@ -273,7 +260,6 @@ const calculateDistanceKm =
       Math.sqrt(
         a
       ),
-
       Math.sqrt(
         1 -
         a
@@ -797,10 +783,6 @@ async (c) => {
     } = body;
 
 
-    /* -----------------------------------------------------
-       CHECKOUT ID
-       ----------------------------------------------------- */
-
     if (
       !checkout_id
     ) {
@@ -813,10 +795,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       CUSTOMER
-       ----------------------------------------------------- */
 
     if (
       !customer ||
@@ -835,10 +813,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       ITEMS
-       ----------------------------------------------------- */
-
     if (
       !Array.isArray(
         items
@@ -855,10 +829,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       SUPABASE
-       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -878,10 +848,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       IDEMPOTENT CHECKOUT
-       ----------------------------------------------------- */
 
     const {
       data:
@@ -935,10 +901,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       NORMALIZE PRODUCT IDS
-       ----------------------------------------------------- */
-
     const productIds =
       Array.from(
         new Set(
@@ -956,10 +918,6 @@ async (c) => {
         )
       );
 
-
-    /* -----------------------------------------------------
-       LOAD PRODUCTS
-       ----------------------------------------------------- */
 
     const dbProducts =
       await getProductsByIds(
@@ -982,10 +940,6 @@ async (c) => {
         )
       );
 
-
-    /* -----------------------------------------------------
-       VALIDATE PRODUCTS
-       ----------------------------------------------------- */
 
     let calculatedSubtotal =
       0;
@@ -1066,25 +1020,6 @@ async (c) => {
       if (
         !dbProduct
       ) {
-
-        console.error(
-          'PRODUCT NOT FOUND:',
-          {
-            requestedProductId:
-              pid,
-
-            rawProductId:
-              item.product_id ||
-              item.id,
-
-            availableProducts:
-              dbProducts.map(
-                (p) =>
-                  p.id
-              )
-          }
-        );
-
 
         return errorResponse(
           c,
@@ -1183,10 +1118,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       DELIVERY / SHIPPING
-       ----------------------------------------------------- */
-
     const normalizedDelivery =
       normalizeDelivery(
         delivery
@@ -1206,13 +1137,8 @@ async (c) => {
 
 
     if (
-      !normalizedDelivery.enabled
+      normalizedDelivery.enabled
     ) {
-
-      shippingFee =
-        0;
-
-    } else {
 
       if (
         !normalizedDelivery.address
@@ -1330,18 +1256,10 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       TRUSTED TOTAL
-       ----------------------------------------------------- */
-
     const calculatedTotalAmount =
       calculatedSubtotal +
       shippingFee;
 
-
-    /* -----------------------------------------------------
-       ORDER NUMBER
-       ----------------------------------------------------- */
 
     const orderNumber =
       `ARC-${Date.now()}-${Math.floor(
@@ -1350,10 +1268,6 @@ async (c) => {
         9000
       )}`;
 
-
-    /* -----------------------------------------------------
-       CUSTOMER HISTORY
-       ----------------------------------------------------- */
 
     const {
       error:
@@ -1395,10 +1309,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       CREATE ORDER
-       ----------------------------------------------------- */
 
     const {
       data:
@@ -1562,10 +1472,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       SAVE ORDER ITEMS
-       ----------------------------------------------------- */
-
     const orderItemsPayload =
       validatedOrderItems.map(
         (
@@ -1586,8 +1492,7 @@ async (c) => {
           price:
             item.price,
 
-          quantity:
-            item.quantity,
+          quantity,
 
           subtotal:
             item.subtotal
@@ -1640,10 +1545,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       FINAL RESPONSE
-       ----------------------------------------------------- */
 
     const finalOrderResponse = {
       checkout_id,
@@ -1806,7 +1707,6 @@ async (c) => {
 
 /* =========================================================
    GET ORDER
-   GET /api/orders/:orderNumber
    ========================================================= */
 
 export const getOrderByNumber =
@@ -2026,29 +1926,7 @@ async (c) => {
 
             payments:
               payments ||
-              [],
-
-            payment:
-              (
-                order.payment_provider ===
-                  'xendit' &&
-                order.payment_id &&
-                order.payment_url
-              )
-                ? {
-                    provider:
-                      'xendit',
-
-                    session_id:
-                      order.payment_id,
-
-                    redirect_url:
-                      order.payment_url,
-
-                    payment_link_url:
-                      order.payment_url
-                  }
-                : null
+              []
           },
           'Order details retrieved successfully'
         );
@@ -2084,12 +1962,6 @@ async (c) => {
     err
   ) {
 
-    console.error(
-      'Get Order Error:',
-      err
-    );
-
-
     return errorResponse(
       c,
       'Failed to fetch order details',
@@ -2103,7 +1975,6 @@ async (c) => {
 
 /* =========================================================
    PUBLIC ORDER STATUS
-   GET /api/order-status/:orderNumber
    ========================================================= */
 
 export const getPublicOrderStatus =
@@ -2184,12 +2055,6 @@ async (c) => {
     if (
       orderError
     ) {
-
-      console.error(
-        'PUBLIC ORDER STATUS ERROR:',
-        orderError
-      );
-
 
       return errorResponse(
         c,
@@ -2277,12 +2142,6 @@ async (c) => {
     err
   ) {
 
-    console.error(
-      'Get Public Order Status Error:',
-      err
-    );
-
-
     return errorResponse(
       c,
       'Failed to load order status',
@@ -2296,7 +2155,6 @@ async (c) => {
 
 /* =========================================================
    ADMIN - GET ORDERS
-   GET /api/admin/orders
    ========================================================= */
 
 export const getAdminOrders =
@@ -2390,12 +2248,6 @@ async (c) => {
       ordersError
     ) {
 
-      console.error(
-        'ADMIN ORDERS ERROR:',
-        ordersError
-      );
-
-
       return errorResponse(
         c,
         'Failed to load orders',
@@ -2411,22 +2263,6 @@ async (c) => {
       )
         ? orders
         : [];
-
-
-    if (
-      safeOrders.length ===
-      0
-    ) {
-
-      return successResponse(
-        c,
-        {
-          orders:
-            []
-        },
-        'Orders loaded successfully'
-      );
-    }
 
 
     const orderNumbers =
@@ -2451,10 +2287,7 @@ async (c) => {
 
       const {
         data:
-          items,
-
-        error:
-          itemsError
+          items
       } =
         await supabase
           .from(
@@ -2476,38 +2309,18 @@ async (c) => {
           );
 
 
-      if (
-        itemsError
-      ) {
-
-        console.error(
-          'ADMIN ORDER ITEMS ERROR:',
-          itemsError
-        );
-
-      } else {
-
-        allItems =
-          Array.isArray(
-            items
-          )
-            ? items
-            : [];
-      }
+      allItems =
+        Array.isArray(
+          items
+        )
+          ? items
+          : [];
     }
 
 
     const result =
       safeOrders.map(
         order => {
-
-          const orderItems =
-            allItems.filter(
-              item =>
-                item.order_number ===
-                order.order_number
-            );
-
 
           const status =
             String(
@@ -2555,7 +2368,11 @@ async (c) => {
               ),
 
             items:
-              orderItems
+              allItems.filter(
+                item =>
+                  item.order_number ===
+                  order.order_number
+              )
           };
         }
       );
@@ -2575,12 +2392,6 @@ async (c) => {
     err
   ) {
 
-    console.error(
-      'Get Admin Orders Error:',
-      err
-    );
-
-
     return errorResponse(
       c,
       'Failed to load orders',
@@ -2594,7 +2405,6 @@ async (c) => {
 
 /* =========================================================
    ADMIN - UPDATE ORDER STATUS
-   PATCH /api/admin/orders/:orderNumber/status
    ========================================================= */
 
 export const updateAdminOrderStatus =
@@ -2624,19 +2434,6 @@ async (c) => {
         ) ||
         ''
       ).trim();
-
-
-    if (
-      !orderNumber
-    ) {
-
-      return errorResponse(
-        c,
-        'Order number is required',
-        null,
-        400
-      );
-    }
 
 
     const body =
@@ -2677,25 +2474,9 @@ async (c) => {
       );
 
 
-    if (
-      !supabase
-    ) {
-
-      return errorResponse(
-        c,
-        'Database unavailable',
-        'Supabase connection unavailable',
-        503
-      );
-    }
-
-
     const {
       data:
-        currentOrder,
-
-      error:
-        lookupError
+        currentOrder
     } =
       await supabase
         .from(
@@ -2704,36 +2485,13 @@ async (c) => {
         .select(`
           id,
           order_number,
-          status,
-          paid_at,
-          total_amount,
-          customer_name,
-          delivery_type
+          status
         `)
         .eq(
           'order_number',
           orderNumber
         )
         .maybeSingle();
-
-
-    if (
-      lookupError
-    ) {
-
-      console.error(
-        'ADMIN ORDER LOOKUP ERROR:',
-        lookupError
-      );
-
-
-      return errorResponse(
-        c,
-        'Failed to find order',
-        lookupError.message,
-        500
-      );
-    }
 
 
     if (
@@ -2782,32 +2540,6 @@ async (c) => {
     }
 
 
-    if (
-      currentStatus ===
-      status
-    ) {
-
-      return successResponse(
-        c,
-        {
-          order_number:
-            currentOrder.order_number,
-
-          status,
-
-          status_label:
-            getOrderStatusLabel(
-              status
-            ),
-
-          idempotent:
-            true
-        },
-        'Order status already updated'
-      );
-    }
-
-
     const now =
       new Date()
         .toISOString();
@@ -2817,8 +2549,7 @@ async (c) => {
       data:
         updatedOrder,
 
-      error:
-        updateError
+      error
     } =
       await supabase
         .from(
@@ -2834,66 +2565,19 @@ async (c) => {
           'id',
           currentOrder.id
         )
-        .select(`
-          id,
-          order_number,
-          customer_name,
-          total_amount,
-          delivery_type,
-          status,
-          paid_at,
-          created_at,
-          updated_at
-        `)
+        .select()
         .single();
 
 
     if (
-      updateError
+      error
     ) {
-
-      console.error(
-        'ADMIN STATUS UPDATE ERROR:',
-        updateError
-      );
-
 
       return errorResponse(
         c,
         'Failed to update order status',
-        updateError.message,
+        error.message,
         500
-      );
-    }
-
-
-    if (
-      inMemoryOrdersMap.has(
-        orderNumber
-      )
-    ) {
-
-      const memoryOrder =
-        inMemoryOrdersMap.get(
-          orderNumber
-        );
-
-
-      inMemoryOrdersMap.set(
-        orderNumber,
-        {
-          ...memoryOrder,
-
-          status,
-
-          status_label:
-            getOrderStatusLabel(
-              status
-            ),
-
-          updated_at:
-            now
-        }
       );
     }
 
@@ -2902,12 +2586,6 @@ async (c) => {
       c,
       {
         ...updatedOrder,
-
-        total_amount:
-          Number(
-            updatedOrder.total_amount ??
-            0
-          ),
 
         status_label:
           getOrderStatusLabel(
@@ -2922,15 +2600,317 @@ async (c) => {
     err
   ) {
 
+    return errorResponse(
+      c,
+      'Failed to update order status',
+      err?.message ||
+      err,
+      500
+    );
+  }
+};
+
+
+/* =========================================================
+   ADMIN - DELETE ORDER
+   DELETE /api/admin/orders/:orderNumber
+   ========================================================= */
+
+export const deleteAdminOrder =
+async (c) => {
+
+  try {
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    const orderNumber =
+      String(
+        c.req.param(
+          'orderNumber'
+        ) ||
+        ''
+      ).trim();
+
+
+    if (
+      !orderNumber
+    ) {
+
+      return errorResponse(
+        c,
+        'Order number is required',
+        null,
+        400
+      );
+    }
+
+
+    const supabase =
+      getSupabaseClient(
+        c.env
+      );
+
+
+    if (
+      !supabase
+    ) {
+
+      return errorResponse(
+        c,
+        'Database unavailable',
+        'Supabase connection unavailable',
+        503
+      );
+    }
+
+
+    const {
+      data:
+        order,
+
+      error:
+        lookupError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .select(`
+          id,
+          order_number,
+          status,
+          paid_at,
+          stock_processed,
+          stock_restored
+        `)
+        .eq(
+          'order_number',
+          orderNumber
+        )
+        .maybeSingle();
+
+
+    if (
+      lookupError
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to find order',
+        lookupError.message,
+        500
+      );
+    }
+
+
+    if (
+      !order
+    ) {
+
+      return errorResponse(
+        c,
+        'Order not found',
+        `Order '${orderNumber}' does not exist`,
+        404
+      );
+    }
+
+
+    const currentStatus =
+      String(
+        order.status ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+
+
+    if (
+      currentStatus !==
+        'pending' &&
+      currentStatus !==
+        'failed'
+    ) {
+
+      return errorResponse(
+        c,
+        'Order cannot be deleted',
+        `Order with status '${currentStatus}' cannot be deleted`,
+        400
+      );
+    }
+
+
+    if (
+      order.paid_at
+    ) {
+
+      return errorResponse(
+        c,
+        'Paid order cannot be deleted',
+        'This order already has a payment timestamp',
+        400
+      );
+    }
+
+
+    if (
+      order.stock_processed ===
+      true
+    ) {
+
+      return errorResponse(
+        c,
+        'Processed order cannot be deleted',
+        'Stock has already been processed for this order',
+        400
+      );
+    }
+
+
+    await supabase
+      .from(
+        'payments'
+      )
+      .delete()
+      .eq(
+        'order_number',
+        orderNumber
+      );
+
+
+    const {
+      error:
+        itemsDeleteError
+    } =
+      await supabase
+        .from(
+          'order_items'
+        )
+        .delete()
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
+
+    if (
+      itemsDeleteError
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to delete order items',
+        itemsDeleteError.message,
+        500
+      );
+    }
+
+
+    const {
+      data:
+        deletedOrders,
+
+      error:
+        deleteError
+    } =
+      await supabase
+        .from(
+          'orders'
+        )
+        .delete()
+        .eq(
+          'order_number',
+          orderNumber
+        )
+        .select(`
+          id,
+          order_number,
+          status
+        `);
+
+
+    if (
+      deleteError
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to delete order',
+        deleteError.message,
+        500
+      );
+    }
+
+
+    const deletedOrder =
+      Array.isArray(
+        deletedOrders
+      )
+        ? deletedOrders[0]
+        : null;
+
+
+    if (
+      !deletedOrder
+    ) {
+
+      return errorResponse(
+        c,
+        'Order could not be deleted',
+        `No order deleted for '${orderNumber}'`,
+        500
+      );
+    }
+
+
+    inMemoryOrdersMap.delete(
+      orderNumber
+    );
+
+
+    return successResponse(
+      c,
+      {
+        order_number:
+          deletedOrder.order_number,
+
+        previous_status:
+          deletedOrder.status,
+
+        deleted:
+          true
+      },
+      'Order deleted successfully'
+    );
+
+
+  } catch (
+    err
+  ) {
+
     console.error(
-      'Update Admin Order Status Error:',
+      'Delete Admin Order Error:',
       err
     );
 
 
     return errorResponse(
       c,
-      'Failed to update order status',
+      'Failed to delete order',
       err?.message ||
       err,
       500
@@ -2971,10 +2951,6 @@ async (
       .toISOString();
 
 
-  /* -------------------------------------------------------
-     MEMORY
-     ------------------------------------------------------- */
-
   if (
     inMemoryOrdersMap.has(
       orderNumber
@@ -3010,10 +2986,6 @@ async (
   }
 
 
-  /* -------------------------------------------------------
-     DATABASE
-     ------------------------------------------------------- */
-
   if (
     supabase
   ) {
@@ -3026,12 +2998,6 @@ async (
         now
     };
 
-
-    /*
-     * Kalau payment sukses dan paid_at
-     * belum diberikan dari payment controller,
-     * isi timestamp sekarang.
-     */
 
     if (
       normalizedStatus ===
@@ -3063,12 +3029,6 @@ async (
     if (
       error
     ) {
-
-      console.error(
-        'UPDATE ORDER STATUS ERROR:',
-        error
-      );
-
 
       throw error;
     }
@@ -3116,10 +3076,6 @@ async (
   }
 
 
-  /* -------------------------------------------------------
-     FIND ORDER
-     ------------------------------------------------------- */
-
   const {
     data:
       order,
@@ -3155,10 +3111,6 @@ async (
   }
 
 
-  /* -------------------------------------------------------
-     PREVENT DOUBLE DEDUCTION
-     ------------------------------------------------------- */
-
   if (
     mode ===
       'decrease' &&
@@ -3178,10 +3130,6 @@ async (
   }
 
 
-  /* -------------------------------------------------------
-     PREVENT DOUBLE RESTORE
-     ------------------------------------------------------- */
-
   if (
     mode ===
       'increase' &&
@@ -3200,10 +3148,6 @@ async (
     };
   }
 
-
-  /* -------------------------------------------------------
-     GET ORDER ITEMS
-     ------------------------------------------------------- */
 
   const {
     data:
@@ -3244,10 +3188,6 @@ async (
     );
   }
 
-
-  /* -------------------------------------------------------
-     UPDATE EACH PRODUCT
-     ------------------------------------------------------- */
 
   for (
     const item of items
@@ -3385,10 +3325,6 @@ async (
   }
 
 
-  /* -------------------------------------------------------
-     MARK STOCK PROCESSED
-     ------------------------------------------------------- */
-
   if (
     mode ===
       'decrease'
@@ -3419,10 +3355,6 @@ async (
     }
   }
 
-
-  /* -------------------------------------------------------
-     MARK STOCK RESTORED
-     ------------------------------------------------------- */
 
   if (
     mode ===
