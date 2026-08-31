@@ -1,118 +1,486 @@
-/**
- * Payment Config and Midtrans Integration Service for Cloudflare Workers
- */
+const XENDIT_API_BASE =
+  'https://api.xendit.co';
 
-/**
- * Check if Midtrans Server Key is configured in environment
- */
-export const isMidtransConfigured = (env = {}) => {
-  const serverKey = env.MIDTRANS_SERVER_KEY || (typeof process !== 'undefined' ? process.env.MIDTRANS_SERVER_KEY : undefined);
-  return Boolean(serverKey && serverKey.trim().length > 0);
+
+/* =========================================================
+   BASIC AUTH
+   ========================================================= */
+
+const getXenditAuthHeader = (
+  secretKey
+) => {
+
+  const encoded =
+    btoa(
+      `${secretKey}:`
+    );
+
+  return `Basic ${encoded}`;
 };
 
-/**
- * Creates a Midtrans Snap transaction token/link or returns MOCK payment details
- */
-export const createSnapTransaction = async (env = {}, { orderNumber, grossAmount, customer, items }) => {
-  const serverKey = env.MIDTRANS_SERVER_KEY || (typeof process !== 'undefined' ? process.env.MIDTRANS_SERVER_KEY : undefined);
-  const isProduction = (env.MIDTRANS_ENVIRONMENT || (typeof process !== 'undefined' ? process.env.MIDTRANS_ENVIRONMENT : undefined)) === 'production';
 
-  // If Midtrans credential is not provided, fall back to MOCK MODE
-  if (!serverKey || serverKey.trim() === '' || serverKey.includes('YOUR_SERVER_KEY')) {
-    const mockToken = `mock-snap-${orderNumber}-${Date.now()}`;
-    const mockUrl = `https://app.sandbox.midtrans.com/snap/v1/transactions/mock?token=${mockToken}`;
-    return {
-      is_mock: true,
-      mode: 'MOCK_PAYMENT_MODE',
-      token: mockToken,
-      redirect_url: mockUrl,
-      message: 'Running in Mock Payment Mode (Midtrans credentials not configured yet)'
+/* =========================================================
+   VERIFY CONFIG
+   ========================================================= */
+
+export const isXenditConfigured =
+(env) => {
+
+  return Boolean(
+    env?.XENDIT_SECRET_KEY
+  );
+};
+
+
+/* =========================================================
+   SANITIZE
+   ========================================================= */
+
+const sanitizeReferenceId =
+(value) => {
+
+  return String(value || '')
+    .replace(
+      /[^a-zA-Z0-9_-]/g,
+      ''
+    )
+    .slice(
+      0,
+      64
+    );
+};
+
+
+const sanitizeCustomerName =
+(value) => {
+
+  const result =
+    String(value || 'Customer')
+      .replace(
+        /[^a-zA-Z0-9 ]/g,
+        ''
+      )
+      .trim();
+
+  return (
+    result ||
+    'Customer'
+  ).slice(
+    0,
+    50
+  );
+};
+
+
+/* =========================================================
+   CREATE XENDIT PAYMENT SESSION
+   ========================================================= */
+
+export const createXenditPaymentSession =
+async (
+  env,
+  {
+    orderNumber,
+    grossAmount,
+    customer
+  }
+) => {
+
+  if (
+    !env?.XENDIT_SECRET_KEY
+  ) {
+    throw new Error(
+      'XENDIT_SECRET_KEY is not configured'
+    );
+  }
+
+
+  if (!orderNumber) {
+    throw new Error(
+      'Order number is required'
+    );
+  }
+
+
+  const amount =
+    Number(
+      grossAmount
+    );
+
+
+  if (
+    !Number.isFinite(amount) ||
+    amount <= 0
+  ) {
+    throw new Error(
+      'Invalid payment amount'
+    );
+  }
+
+
+  /*
+   * Reference ID kita buat sama
+   * dengan order_number.
+   *
+   * Ini penting supaya webhook
+   * gampang dicocokkan kembali
+   * ke order di Supabase.
+   */
+  const referenceId =
+    sanitizeReferenceId(
+      orderNumber
+    );
+
+
+  const payload = {
+    reference_id:
+      referenceId,
+
+    session_type:
+      'PAY',
+
+    mode:
+      'PAYMENT_LINK',
+
+    amount,
+
+    currency:
+      'IDR',
+
+    country:
+      'ID',
+
+    capture_method:
+      'AUTOMATIC',
+
+    success_return_url:
+      'https://arumeya.com/payment-success',
+
+    cancel_return_url:
+      'https://arumeya.com/payment-cancelled'
+  };
+
+
+  /*
+   * Customer opsional.
+   * Hanya kirim kalau punya email.
+   */
+  if (
+    customer?.email
+  ) {
+
+    payload.customer = {
+      reference_id:
+        sanitizeReferenceId(
+          `CUST_${orderNumber}`
+        ),
+
+      type:
+        'INDIVIDUAL',
+
+      email:
+        String(
+          customer.email
+        ).trim(),
+
+      individual_detail: {
+        given_names:
+          sanitizeCustomerName(
+            customer.name
+          )
+      }
+    };
+
+
+    if (
+      customer?.phone
+    ) {
+
+      payload.customer.mobile_number =
+        String(
+          customer.phone
+        ).trim();
+    }
+  }
+
+
+  console.log(
+    'Create Xendit Payment Session:',
+    JSON.stringify({
+      ...payload,
+      customer:
+        payload.customer
+          ? {
+              ...payload.customer,
+              email:
+                '[REDACTED]',
+              mobile_number:
+                payload.customer
+                  .mobile_number
+                  ? '[REDACTED]'
+                  : undefined
+            }
+          : undefined
+    })
+  );
+
+
+  const response =
+    await fetch(
+      `${XENDIT_API_BASE}/sessions`,
+      {
+        method:
+          'POST',
+
+        headers: {
+          Authorization:
+            getXenditAuthHeader(
+              env.XENDIT_SECRET_KEY
+            ),
+
+          'Content-Type':
+            'application/json'
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          )
+      }
+    );
+
+
+  const responseText =
+    await response.text();
+
+
+  let result =
+    null;
+
+
+  try {
+
+    result =
+      responseText
+        ? JSON.parse(
+            responseText
+          )
+        : {};
+
+  } catch {
+
+    result = {
+      raw:
+        responseText
     };
   }
 
-  // Real Midtrans Snap API Integration
-  const endpoint = isProduction
-    ? 'https://app.midtrans.com/snap/v1/transactions'
-    : 'https://app.sandbox.midtrans.com/snap/v1/transactions';
-
-  // Base64 encode serverKey + ':' for Basic Auth
-  const authHeader = `Basic ${btoa(serverKey.trim() + ':')}`;
-
-  const payload = {
-    transaction_details: {
-      order_id: orderNumber,
-      gross_amount: Math.round(grossAmount)
-    },
-    customer_details: customer ? {
-      first_name: customer.name || 'Customer',
-      email: customer.email || '',
-      phone: customer.phone || ''
-    } : undefined,
-    item_details: Array.isArray(items) && items.length > 0
-      ? items.map(item => ({
-          id: String(item.product_id || item.id),
-          price: Math.round(item.price),
-          quantity: item.quantity,
-          name: String(item.product_name || item.name || 'Coffee Item').substring(0, 50)
-        }))
-      : undefined
-  };
-
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'Authorization': authHeader
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const responseData = await response.json();
 
   if (!response.ok) {
-    const errorMsg = Array.isArray(responseData.error_messages)
-      ? responseData.error_messages.join(', ')
-      : responseData.message || 'Failed to generate Midtrans Snap transaction';
-    throw new Error(errorMsg);
+
+    console.error(
+      'Xendit create session failed:',
+      result
+    );
+
+
+    throw new Error(
+      result?.message ||
+      result?.error_code ||
+      `Xendit API returned HTTP ${response.status}`
+    );
   }
 
+
+  const sessionId =
+    result.payment_session_id ||
+    result.id ||
+    null;
+
+
+  const redirectUrl =
+    result.payment_link_url ||
+    result.payment_link ||
+    null;
+
+
+  if (!sessionId) {
+
+    console.error(
+      'Xendit session missing payment_session_id:',
+      result
+    );
+
+
+    throw new Error(
+      'Xendit response does not contain payment_session_id'
+    );
+  }
+
+
+  if (!redirectUrl) {
+
+    console.error(
+      'Xendit session missing payment_link_url:',
+      result
+    );
+
+
+    throw new Error(
+      'Xendit response does not contain payment_link_url'
+    );
+  }
+
+
   return {
-    is_mock: false,
-    mode: isProduction ? 'PRODUCTION' : 'SANDBOX',
-    token: responseData.token,
-    redirect_url: responseData.redirect_url
+    provider:
+      'xendit',
+
+    session_id:
+      sessionId,
+
+    redirect_url:
+      redirectUrl,
+
+    payment_link_url:
+      redirectUrl,
+
+    reference_id:
+      result.reference_id ||
+      referenceId,
+
+    status:
+      result.status ||
+      null,
+
+    raw:
+      result
   };
 };
 
-/**
- * Verify Midtrans Webhook Signature Key using SHA-512 (Web Crypto API)
- * SHA512(order_id + status_code + gross_amount + ServerKey)
- */
-export const verifyMidtransSignature = async (env = {}, callbackBody = {}) => {
-  const serverKey = env.MIDTRANS_SERVER_KEY || (typeof process !== 'undefined' ? process.env.MIDTRANS_SERVER_KEY : undefined);
-  
-  // In mock mode, signature check passes
-  if (!serverKey || serverKey.trim() === '' || serverKey.includes('YOUR_SERVER_KEY')) {
-    return true;
+
+/* =========================================================
+   GET PAYMENT SESSION
+   ========================================================= */
+
+export const getXenditPaymentSession =
+async (
+  env,
+  sessionId
+) => {
+
+  if (
+    !env?.XENDIT_SECRET_KEY
+  ) {
+    throw new Error(
+      'XENDIT_SECRET_KEY is not configured'
+    );
   }
 
-  const { order_id, status_code, gross_amount, signature_key } = callbackBody;
-  if (!order_id || !status_code || !gross_amount || !signature_key) {
-    return false;
+
+  if (!sessionId) {
+    throw new Error(
+      'Payment session ID is required'
+    );
   }
+
+
+  const response =
+    await fetch(
+      `${XENDIT_API_BASE}/sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method:
+          'GET',
+
+        headers: {
+          Authorization:
+            getXenditAuthHeader(
+              env.XENDIT_SECRET_KEY
+            ),
+
+          Accept:
+            'application/json'
+        }
+      }
+    );
+
+
+  const responseText =
+    await response.text();
+
+
+  let result =
+    null;
+
 
   try {
-    const rawString = `${order_id}${status_code}${gross_amount}${serverKey.trim()}`;
-    const encoder = new TextEncoder();
-    const data = encoder.encode(rawString);
-    const hashBuffer = await crypto.subtle.digest('SHA-512', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const calculatedSignature = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-    return calculatedSignature.toLowerCase() === signature_key.toLowerCase();
-  } catch (err) {
-    console.error('Signature verification error:', err);
+    result =
+      responseText
+        ? JSON.parse(
+            responseText
+          )
+        : {};
+
+  } catch {
+
+    result = {
+      raw:
+        responseText
+    };
+  }
+
+
+  if (!response.ok) {
+
+    console.error(
+      'Xendit get session failed:',
+      result
+    );
+
+
+    throw new Error(
+      result?.message ||
+      result?.error_code ||
+      `Xendit API returned HTTP ${response.status}`
+    );
+  }
+
+
+  return result;
+};
+
+
+/* =========================================================
+   VERIFY XENDIT WEBHOOK
+   ========================================================= */
+
+export const verifyXenditWebhook =
+(
+  env,
+  callbackToken
+) => {
+
+  const expectedToken =
+    env?.XENDIT_WEBHOOK_TOKEN;
+
+
+  if (
+    !expectedToken ||
+    !callbackToken
+  ) {
     return false;
   }
+
+
+  /*
+   * Untuk Cloudflare Worker kita
+   * cukup cocokkan token yang
+   * dikirim Xendit dengan secret
+   * yang tersimpan di environment.
+   */
+  return (
+    String(callbackToken) ===
+    String(expectedToken)
+  );
 };
