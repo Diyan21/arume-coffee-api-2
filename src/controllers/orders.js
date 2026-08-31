@@ -21,6 +21,29 @@ const inMemoryOrdersMap =
 
 
 /* =========================================================
+   STORE LOCATION
+   ========================================================= */
+
+/*
+ * Titik asal pengiriman Arume Coffee.
+ *
+ * MIN 7 Jakarta Barat
+ * Cengkareng Timur
+ */
+
+const STORE_LOCATION = {
+  name:
+    'Arume Coffee',
+
+  latitude:
+    -6.145680,
+
+  longitude:
+    106.736081
+};
+
+
+/* =========================================================
    PRODUCT ID ALIASES
    ========================================================= */
 
@@ -54,12 +77,423 @@ const normalizeProductId =
       id || ''
     );
 
+
   return (
     PRODUCT_ID_ALIASES[
       rawId
     ] ||
     rawId
   );
+};
+
+
+/* =========================================================
+   NUMBER HELPERS
+   ========================================================= */
+
+const toFiniteNumber =
+(value) => {
+
+  const number =
+    Number(
+      value
+    );
+
+
+  return Number.isFinite(
+    number
+  )
+    ? number
+    : null;
+};
+
+
+/* =========================================================
+   HAVERSINE DISTANCE
+   ========================================================= */
+
+/*
+ * Menghitung jarak garis lurus
+ * antara toko dan customer.
+ *
+ * Return dalam kilometer.
+ */
+
+const calculateDistanceKm =
+(
+  lat1,
+  lon1,
+  lat2,
+  lon2
+) => {
+
+  const earthRadiusKm =
+    6371;
+
+
+  const toRadians =
+    (degree) =>
+      degree *
+      (
+        Math.PI /
+        180
+      );
+
+
+  const latitudeDifference =
+    toRadians(
+      lat2 -
+      lat1
+    );
+
+
+  const longitudeDifference =
+    toRadians(
+      lon2 -
+      lon1
+    );
+
+
+  const a =
+    Math.sin(
+      latitudeDifference /
+      2
+    ) ** 2 +
+
+    Math.cos(
+      toRadians(
+        lat1
+      )
+    ) *
+
+    Math.cos(
+      toRadians(
+        lat2
+      )
+    ) *
+
+    Math.sin(
+      longitudeDifference /
+      2
+    ) ** 2;
+
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(
+        a
+      ),
+
+      Math.sqrt(
+        1 -
+        a
+      )
+    );
+
+
+  return (
+    earthRadiusKm *
+    c
+  );
+};
+
+
+/* =========================================================
+   ROUND DISTANCE
+   ========================================================= */
+
+const roundDistance =
+(distance) => {
+
+  return Math.round(
+    Number(
+      distance
+    ) *
+    100
+  ) / 100;
+};
+
+
+/* =========================================================
+   GET SHIPPING RATE
+   ========================================================= */
+
+const getShippingRate =
+async (
+  supabase,
+  distanceKm
+) => {
+
+  const {
+    data: shippingRates,
+    error
+  } =
+    await supabase
+      .from(
+        'shipping_settings'
+      )
+      .select(`
+        id,
+        min_distance,
+        max_distance,
+        fee,
+        active
+      `)
+      .eq(
+        'active',
+        true
+      )
+      .order(
+        'max_distance',
+        {
+          ascending:
+            true
+        }
+      );
+
+
+  if (error) {
+
+    console.error(
+      'SHIPPING RATE LOOKUP ERROR:',
+      error
+    );
+
+
+    throw new Error(
+      'Failed to load shipping rates'
+    );
+  }
+
+
+  if (
+    !Array.isArray(
+      shippingRates
+    ) ||
+    shippingRates.length === 0
+  ) {
+
+    throw new Error(
+      'No active shipping rates configured'
+    );
+  }
+
+
+  /*
+   * Contoh:
+   *
+   * 0 - 2 KM
+   * 2 - 5 KM
+   * 5 - 8 KM
+   *
+   * Kalau jarak tepat 2 KM,
+   * tier pertama dipilih karena
+   * list sudah diurutkan max_distance.
+   */
+
+  const matchedRate =
+    shippingRates.find(
+      (rate) => {
+
+        const minDistance =
+          Number(
+            rate.min_distance
+          );
+
+
+        const maxDistance =
+          Number(
+            rate.max_distance
+          );
+
+
+        if (
+          !Number.isFinite(
+            minDistance
+          ) ||
+          !Number.isFinite(
+            maxDistance
+          )
+        ) {
+
+          return false;
+        }
+
+
+        return (
+          distanceKm >=
+            minDistance &&
+          distanceKm <=
+            maxDistance
+        );
+      }
+    );
+
+
+  if (!matchedRate) {
+
+    return null;
+  }
+
+
+  const fee =
+    Number(
+      matchedRate.fee
+    );
+
+
+  if (
+    !Number.isInteger(
+      fee
+    ) ||
+    fee < 0
+  ) {
+
+    throw new Error(
+      `Invalid shipping fee configuration for rate '${matchedRate.id}'`
+    );
+  }
+
+
+  return {
+    id:
+      matchedRate.id,
+
+    min_distance:
+      Number(
+        matchedRate.min_distance
+      ),
+
+    max_distance:
+      Number(
+        matchedRate.max_distance
+      ),
+
+    fee
+  };
+};
+
+
+/* =========================================================
+   NORMALIZE DELIVERY REQUEST
+   ========================================================= */
+
+/*
+ * Delivery dianggap aktif jika frontend mengirim:
+ *
+ * {
+ *   "delivery": {
+ *     "enabled": true,
+ *     "address": "...",
+ *     "latitude": -6.xxx,
+ *     "longitude": 106.xxx
+ *   }
+ * }
+ *
+ * Juga support:
+ *
+ * type: "delivery"
+ */
+
+const normalizeDelivery =
+(delivery) => {
+
+  if (
+    !delivery ||
+    typeof delivery !==
+      'object'
+  ) {
+
+    return {
+      enabled:
+        false,
+
+      type:
+        'pickup',
+
+      address:
+        null,
+
+      latitude:
+        null,
+
+      longitude:
+        null
+    };
+  }
+
+
+  const type =
+    String(
+      delivery.type ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const enabled =
+    delivery.enabled ===
+      true ||
+    type ===
+      'delivery';
+
+
+  if (!enabled) {
+
+    return {
+      enabled:
+        false,
+
+      type:
+        'pickup',
+
+      address:
+        null,
+
+      latitude:
+        null,
+
+      longitude:
+        null
+    };
+  }
+
+
+  const latitude =
+    toFiniteNumber(
+      delivery.latitude
+    );
+
+
+  const longitude =
+    toFiniteNumber(
+      delivery.longitude
+    );
+
+
+  const address =
+    delivery.address
+      ? String(
+          delivery.address
+        ).trim()
+      : '';
+
+
+  return {
+    enabled:
+      true,
+
+    type:
+      'delivery',
+
+    address,
+
+    latitude,
+
+    longitude
+  };
 };
 
 
@@ -78,15 +512,21 @@ async (
     error: itemsError
   } =
     await supabase
-      .from('order_items')
-      .select('*')
+      .from(
+        'order_items'
+      )
+      .select(
+        '*'
+      )
       .eq(
         'order_number',
         order.order_number
       );
 
 
-  if (itemsError) {
+  if (
+    itemsError
+  ) {
 
     console.error(
       'Existing order items lookup error:',
@@ -99,10 +539,6 @@ async (
     null;
 
 
-  /*
-   * Jika order sudah punya
-   * Xendit Payment Session.
-   */
   if (
     order.payment_provider ===
       'xendit' &&
@@ -126,6 +562,11 @@ async (
   }
 
 
+  const isDelivery =
+    order.delivery_type ===
+      'delivery';
+
+
   return {
     checkout_id:
       order.checkout_id,
@@ -133,8 +574,24 @@ async (
     order_number:
       order.order_number,
 
+    subtotal_amount:
+      Number(
+        order.subtotal_amount ??
+        order.total_amount ??
+        0
+      ),
+
+    shipping_fee:
+      Number(
+        order.shipping_fee ??
+        0
+      ),
+
     total_amount:
-      order.total_amount,
+      Number(
+        order.total_amount ??
+        0
+      ),
 
     status:
       order.status,
@@ -150,8 +607,57 @@ async (
         order.customer_phone
     },
 
+    delivery: {
+      type:
+        isDelivery
+          ? 'delivery'
+          : 'pickup',
+
+      enabled:
+        isDelivery,
+
+      address:
+        isDelivery
+          ? (
+              order.delivery_address ||
+              null
+            )
+          : null,
+
+      latitude:
+        isDelivery
+          ? (
+              order.delivery_latitude ??
+              null
+            )
+          : null,
+
+      longitude:
+        isDelivery
+          ? (
+              order.delivery_longitude ??
+              null
+            )
+          : null,
+
+      distance_km:
+        isDelivery
+          ? (
+              order.delivery_distance_km ??
+              null
+            )
+          : null,
+
+      shipping_fee:
+        Number(
+          order.shipping_fee ??
+          0
+        )
+    },
+
     items:
-      items || [],
+      items ||
+      [],
 
     notes:
       order.notes ||
@@ -210,7 +716,8 @@ async (c) => {
       customer,
       items,
       notes,
-      checkout_id
+      checkout_id,
+      delivery
     } = body;
 
 
@@ -218,7 +725,9 @@ async (c) => {
        1. CHECKOUT ID
        ----------------------------------------------------- */
 
-    if (!checkout_id) {
+    if (
+      !checkout_id
+    ) {
 
       return errorResponse(
         c,
@@ -231,9 +740,6 @@ async (c) => {
 
     /* -----------------------------------------------------
        2. CUSTOMER
-
-       Nama wajib.
-       Email dan phone opsional.
        ----------------------------------------------------- */
 
     if (
@@ -261,7 +767,8 @@ async (c) => {
       !Array.isArray(
         items
       ) ||
-      items.length === 0
+      items.length ===
+        0
     ) {
 
       return errorResponse(
@@ -283,7 +790,9 @@ async (c) => {
       );
 
 
-    if (!supabase) {
+    if (
+      !supabase
+    ) {
 
       return errorResponse(
         c,
@@ -299,12 +808,19 @@ async (c) => {
        ----------------------------------------------------- */
 
     const {
-      data: existingOrder,
-      error: existingOrderError
+      data:
+        existingOrder,
+
+      error:
+        existingOrderError
     } =
       await supabase
-        .from('orders')
-        .select('*')
+        .from(
+          'orders'
+        )
+        .select(
+          '*'
+        )
         .eq(
           'checkout_id',
           checkout_id
@@ -312,7 +828,9 @@ async (c) => {
         .maybeSingle();
 
 
-    if (existingOrderError) {
+    if (
+      existingOrderError
+    ) {
 
       console.error(
         'Checkout lookup error:',
@@ -321,7 +839,9 @@ async (c) => {
     }
 
 
-    if (existingOrder) {
+    if (
+      existingOrder
+    ) {
 
       const existingResponse =
         await getExistingOrderResponse(
@@ -377,11 +897,16 @@ async (c) => {
     const dbProductMap =
       new Map(
         dbProducts.map(
-          (product) => [
+          (
+            product
+          ) => [
+
             String(
               product.id
             ),
+
             product
+
           ]
         )
       );
@@ -391,7 +916,7 @@ async (c) => {
        8. VALIDATE PRODUCTS
        ----------------------------------------------------- */
 
-    let calculatedTotalAmount =
+    let calculatedSubtotal =
       0;
 
 
@@ -417,7 +942,9 @@ async (c) => {
         );
 
 
-      if (!pid) {
+      if (
+        !pid
+      ) {
 
         return errorResponse(
           c,
@@ -432,7 +959,8 @@ async (c) => {
         Number.isNaN(
           quantity
         ) ||
-        quantity <= 0
+        quantity <=
+          0
       ) {
 
         return errorResponse(
@@ -445,7 +973,8 @@ async (c) => {
 
 
       if (
-        quantity > 100
+        quantity >
+        100
       ) {
 
         return errorResponse(
@@ -463,7 +992,9 @@ async (c) => {
         );
 
 
-      if (!dbProduct) {
+      if (
+        !dbProduct
+      ) {
 
         console.error(
           'PRODUCT NOT FOUND:',
@@ -477,7 +1008,8 @@ async (c) => {
 
             availableProducts:
               dbProducts.map(
-                (p) => p.id
+                (p) =>
+                  p.id
               )
           }
         );
@@ -520,7 +1052,8 @@ async (c) => {
         Number.isFinite(
           stock
         ) &&
-        quantity > stock
+        quantity >
+          stock
       ) {
 
         return errorResponse(
@@ -533,7 +1066,7 @@ async (c) => {
 
 
       /* ---------------------------------------------------
-         PRICE FROM DATABASE
+         TRUSTED PRICE FROM DATABASE
          --------------------------------------------------- */
 
       const unitPrice =
@@ -546,7 +1079,8 @@ async (c) => {
         !Number.isFinite(
           unitPrice
         ) ||
-        unitPrice <= 0
+        unitPrice <=
+          0
       ) {
 
         return errorResponse(
@@ -563,7 +1097,7 @@ async (c) => {
         quantity;
 
 
-      calculatedTotalAmount +=
+      calculatedSubtotal +=
         subtotal;
 
 
@@ -587,7 +1121,178 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       9. ORDER NUMBER
+       9. DELIVERY / SHIPPING
+       ----------------------------------------------------- */
+
+    const normalizedDelivery =
+      normalizeDelivery(
+        delivery
+      );
+
+
+    let shippingFee =
+      0;
+
+
+    let deliveryDistanceKm =
+      null;
+
+
+    let matchedShippingRate =
+      null;
+
+
+    /*
+     * PICKUP
+     */
+
+    if (
+      !normalizedDelivery.enabled
+    ) {
+
+      shippingFee =
+        0;
+    }
+
+
+    /*
+     * DELIVERY
+     */
+
+    else {
+
+      if (
+        !normalizedDelivery.address
+      ) {
+
+        return errorResponse(
+          c,
+          'Delivery address required',
+          'Delivery address is required',
+          400
+        );
+      }
+
+
+      if (
+        normalizedDelivery.latitude ===
+          null ||
+        normalizedDelivery.longitude ===
+          null
+      ) {
+
+        return errorResponse(
+          c,
+          'Delivery location required',
+          'Customer latitude and longitude are required for delivery',
+          400
+        );
+      }
+
+
+      if (
+        normalizedDelivery.latitude <
+          -90 ||
+        normalizedDelivery.latitude >
+          90
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid latitude',
+          'Customer latitude must be between -90 and 90',
+          400
+        );
+      }
+
+
+      if (
+        normalizedDelivery.longitude <
+          -180 ||
+        normalizedDelivery.longitude >
+          180
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid longitude',
+          'Customer longitude must be between -180 and 180',
+          400
+        );
+      }
+
+
+      const rawDistance =
+        calculateDistanceKm(
+
+          STORE_LOCATION.latitude,
+
+          STORE_LOCATION.longitude,
+
+          normalizedDelivery.latitude,
+
+          normalizedDelivery.longitude
+
+        );
+
+
+      if (
+        !Number.isFinite(
+          rawDistance
+        )
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid delivery distance',
+          'Unable to calculate delivery distance',
+          400
+        );
+      }
+
+
+      deliveryDistanceKm =
+        roundDistance(
+          rawDistance
+        );
+
+
+      matchedShippingRate =
+        await getShippingRate(
+          supabase,
+          deliveryDistanceKm
+        );
+
+
+      if (
+        !matchedShippingRate
+      ) {
+
+        return errorResponse(
+          c,
+          'Lokasi di luar jangkauan pengiriman',
+          `Jarak pengiriman ${deliveryDistanceKm} KM tidak masuk tarif pengiriman yang tersedia`,
+          400
+        );
+      }
+
+
+      shippingFee =
+        matchedShippingRate.fee;
+    }
+
+
+    /* -----------------------------------------------------
+       10. CALCULATE TRUSTED TOTAL
+       ----------------------------------------------------- */
+
+    const calculatedTotalAmount =
+      calculatedSubtotal +
+      shippingFee;
+
+
+    /* -----------------------------------------------------
+       11. ORDER NUMBER
        ----------------------------------------------------- */
 
     const orderNumber =
@@ -599,14 +1304,17 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       10. SAVE CUSTOMER HISTORY
+       12. SAVE CUSTOMER HISTORY
        ----------------------------------------------------- */
 
     const {
-      error: customerError
+      error:
+        customerError
     } =
       await supabase
-        .from('customers')
+        .from(
+          'customers'
+        )
         .insert({
           name:
             String(
@@ -629,12 +1337,10 @@ async (c) => {
         });
 
 
-    if (customerError) {
+    if (
+      customerError
+    ) {
 
-      /*
-       * Customer history bukan
-       * data utama checkout.
-       */
       console.warn(
         'Customer insert warning:',
         customerError
@@ -643,15 +1349,20 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       11. CREATE ORDER
+       13. CREATE ORDER
        ----------------------------------------------------- */
 
     const {
-      data: orderData,
-      error: orderError
+      data:
+        orderData,
+
+      error:
+        orderError
     } =
       await supabase
-        .from('orders')
+        .from(
+          'orders'
+        )
         .insert({
           checkout_id,
 
@@ -677,8 +1388,54 @@ async (c) => {
                 ).trim()
               : null,
 
+
+          /* -----------------------------------------------
+             PRICE
+             ----------------------------------------------- */
+
+          subtotal_amount:
+            calculatedSubtotal,
+
+          shipping_fee:
+            shippingFee,
+
           total_amount:
             calculatedTotalAmount,
+
+
+          /* -----------------------------------------------
+             DELIVERY
+             ----------------------------------------------- */
+
+          delivery_type:
+            normalizedDelivery.enabled
+              ? 'delivery'
+              : 'pickup',
+
+          delivery_address:
+            normalizedDelivery.enabled
+              ? normalizedDelivery.address
+              : null,
+
+          delivery_latitude:
+            normalizedDelivery.enabled
+              ? normalizedDelivery.latitude
+              : null,
+
+          delivery_longitude:
+            normalizedDelivery.enabled
+              ? normalizedDelivery.longitude
+              : null,
+
+          delivery_distance_km:
+            normalizedDelivery.enabled
+              ? deliveryDistanceKm
+              : null,
+
+
+          /* -----------------------------------------------
+             ORDER STATUS
+             ----------------------------------------------- */
 
           status:
             'pending',
@@ -719,7 +1476,9 @@ async (c) => {
        ORDER INSERT ERROR
        ----------------------------------------------------- */
 
-    if (orderError) {
+    if (
+      orderError
+    ) {
 
       console.error(
         'ORDER INSERT FAILED:',
@@ -727,16 +1486,17 @@ async (c) => {
       );
 
 
-      /*
-       * Request bersamaan dengan
-       * checkout_id yang sama.
-       */
       const {
-        data: duplicateOrder
+        data:
+          duplicateOrder
       } =
         await supabase
-          .from('orders')
-          .select('*')
+          .from(
+            'orders'
+          )
+          .select(
+            '*'
+          )
           .eq(
             'checkout_id',
             checkout_id
@@ -744,7 +1504,9 @@ async (c) => {
           .maybeSingle();
 
 
-      if (duplicateOrder) {
+      if (
+        duplicateOrder
+      ) {
 
         const duplicateResponse =
           await getExistingOrderResponse(
@@ -772,12 +1534,14 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       12. SAVE ORDER ITEMS
+       14. SAVE ORDER ITEMS
        ----------------------------------------------------- */
 
     const orderItemsPayload =
       validatedOrderItems.map(
-        (item) => ({
+        (
+          item
+        ) => ({
           order_id:
             orderData.id,
 
@@ -803,16 +1567,21 @@ async (c) => {
 
 
     const {
-      error: orderItemsError
+      error:
+        orderItemsError
     } =
       await supabase
-        .from('order_items')
+        .from(
+          'order_items'
+        )
         .insert(
           orderItemsPayload
         );
 
 
-    if (orderItemsError) {
+    if (
+      orderItemsError
+    ) {
 
       console.error(
         'ORDER ITEMS INSERT FAILED:',
@@ -821,7 +1590,9 @@ async (c) => {
 
 
       await supabase
-        .from('orders')
+        .from(
+          'orders'
+        )
         .update({
           status:
             'failed'
@@ -842,10 +1613,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       13. FINAL ORDER RESPONSE
-
-       Payment dibuat terpisah lewat:
-       POST /api/payment/create
+       15. FINAL ORDER RESPONSE
        ----------------------------------------------------- */
 
     const finalOrderResponse = {
@@ -853,6 +1621,12 @@ async (c) => {
 
       order_number:
         orderNumber,
+
+      subtotal_amount:
+        calculatedSubtotal,
+
+      shipping_fee:
+        shippingFee,
 
       total_amount:
         calculatedTotalAmount,
@@ -878,6 +1652,53 @@ async (c) => {
             ? String(
                 customer.phone
               ).trim()
+            : null
+      },
+
+      delivery: {
+        type:
+          normalizedDelivery.enabled
+            ? 'delivery'
+            : 'pickup',
+
+        enabled:
+          normalizedDelivery.enabled,
+
+        address:
+          normalizedDelivery.enabled
+            ? normalizedDelivery.address
+            : null,
+
+        latitude:
+          normalizedDelivery.enabled
+            ? normalizedDelivery.latitude
+            : null,
+
+        longitude:
+          normalizedDelivery.enabled
+            ? normalizedDelivery.longitude
+            : null,
+
+        distance_km:
+          normalizedDelivery.enabled
+            ? deliveryDistanceKm
+            : null,
+
+        shipping_fee:
+          shippingFee,
+
+        rate:
+          matchedShippingRate
+            ? {
+                id:
+                  matchedShippingRate.id,
+
+                min_distance:
+                  matchedShippingRate.min_distance,
+
+                max_distance:
+                  matchedShippingRate.max_distance
+              }
             : null
       },
 
@@ -924,7 +1745,9 @@ async (c) => {
     );
 
 
-  } catch (err) {
+  } catch (
+    err
+  ) {
 
     console.error(
       'Create Order Error:',
@@ -959,7 +1782,9 @@ async (c) => {
       );
 
 
-    if (!orderNumber) {
+    if (
+      !orderNumber
+    ) {
 
       return errorResponse(
         c,
@@ -976,15 +1801,24 @@ async (c) => {
       );
 
 
-    if (supabase) {
+    if (
+      supabase
+    ) {
 
       const {
-        data: order,
-        error: orderError
+        data:
+          order,
+
+        error:
+          orderError
       } =
         await supabase
-          .from('orders')
-          .select('*')
+          .from(
+            'orders'
+          )
+          .select(
+            '*'
+          )
           .eq(
             'order_number',
             orderNumber
@@ -998,19 +1832,28 @@ async (c) => {
       ) {
 
         const {
-          data: items,
-          error: itemsError
+          data:
+            items,
+
+          error:
+            itemsError
         } =
           await supabase
-            .from('order_items')
-            .select('*')
+            .from(
+              'order_items'
+            )
+            .select(
+              '*'
+            )
             .eq(
               'order_number',
               orderNumber
             );
 
 
-        if (itemsError) {
+        if (
+          itemsError
+        ) {
 
           console.error(
             'Order items lookup error:',
@@ -1020,12 +1863,19 @@ async (c) => {
 
 
         const {
-          data: payments,
-          error: paymentsError
+          data:
+            payments,
+
+          error:
+            paymentsError
         } =
           await supabase
-            .from('payments')
-            .select('*')
+            .from(
+              'payments'
+            )
+            .select(
+              '*'
+            )
             .eq(
               'order_number',
               orderNumber
@@ -1039,7 +1889,9 @@ async (c) => {
             );
 
 
-        if (paymentsError) {
+        if (
+          paymentsError
+        ) {
 
           console.error(
             'Payment history lookup error:',
@@ -1048,16 +1900,90 @@ async (c) => {
         }
 
 
+        const isDelivery =
+          order.delivery_type ===
+            'delivery';
+
+
         return successResponse(
           c,
           {
             ...order,
 
+            subtotal_amount:
+              Number(
+                order.subtotal_amount ??
+                order.total_amount ??
+                0
+              ),
+
+            shipping_fee:
+              Number(
+                order.shipping_fee ??
+                0
+              ),
+
+            total_amount:
+              Number(
+                order.total_amount ??
+                0
+              ),
+
+            delivery: {
+              type:
+                isDelivery
+                  ? 'delivery'
+                  : 'pickup',
+
+              enabled:
+                isDelivery,
+
+              address:
+                isDelivery
+                  ? (
+                      order.delivery_address ||
+                      null
+                    )
+                  : null,
+
+              latitude:
+                isDelivery
+                  ? (
+                      order.delivery_latitude ??
+                      null
+                    )
+                  : null,
+
+              longitude:
+                isDelivery
+                  ? (
+                      order.delivery_longitude ??
+                      null
+                    )
+                  : null,
+
+              distance_km:
+                isDelivery
+                  ? (
+                      order.delivery_distance_km ??
+                      null
+                    )
+                  : null,
+
+              shipping_fee:
+                Number(
+                  order.shipping_fee ??
+                  0
+                )
+            },
+
             items:
-              items || [],
+              items ||
+              [],
 
             payments:
-              payments || [],
+              payments ||
+              [],
 
             payment:
               (
@@ -1111,7 +2037,9 @@ async (c) => {
     );
 
 
-  } catch (err) {
+  } catch (
+    err
+  ) {
 
     return errorResponse(
       c,
@@ -1181,13 +2109,17 @@ async (
      DATABASE
      ------------------------------------------------------- */
 
-  if (supabase) {
+  if (
+    supabase
+  ) {
 
     const {
       error
     } =
       await supabase
-        .from('orders')
+        .from(
+          'orders'
+        )
         .update({
           status:
             newStatus,
@@ -1202,7 +2134,9 @@ async (
         );
 
 
-    if (error) {
+    if (
+      error
+    ) {
 
       console.error(
         'UPDATE ORDER STATUS ERROR:',
@@ -1240,7 +2174,9 @@ async (
     );
 
 
-  if (!supabase) {
+  if (
+    !supabase
+  ) {
 
     throw new Error(
       'Supabase unavailable'
@@ -1266,11 +2202,16 @@ async (
      ------------------------------------------------------- */
 
   const {
-    data: order,
-    error: orderError
+    data:
+      order,
+
+    error:
+      orderError
   } =
     await supabase
-      .from('orders')
+      .from(
+        'orders'
+      )
       .select(`
         id,
         order_number,
@@ -1346,11 +2287,16 @@ async (
      ------------------------------------------------------- */
 
   const {
-    data: items,
-    error: itemsError
+    data:
+      items,
+
+    error:
+      itemsError
   } =
     await supabase
-      .from('order_items')
+      .from(
+        'order_items'
+      )
       .select(
         'product_id, quantity'
       )
@@ -1360,7 +2306,9 @@ async (
       );
 
 
-  if (itemsError) {
+  if (
+    itemsError
+  ) {
 
     throw itemsError;
   }
@@ -1368,7 +2316,8 @@ async (
 
   if (
     !items ||
-    items.length === 0
+    items.length ===
+      0
   ) {
 
     throw new Error(
@@ -1392,11 +2341,16 @@ async (
 
 
     const {
-      data: product,
-      error: productError
+      data:
+        product,
+
+      error:
+        productError
     } =
       await supabase
-        .from('products')
+        .from(
+          'products'
+        )
         .select(
           'id, stock'
         )
@@ -1428,7 +2382,8 @@ async (
       !Number.isFinite(
         qty
       ) ||
-      qty <= 0
+      qty <=
+        0
     ) {
 
       continue;
@@ -1495,10 +2450,13 @@ async (
 
 
     const {
-      error: updateStockError
+      error:
+        updateStockError
     } =
       await supabase
-        .from('products')
+        .from(
+          'products'
+        )
         .update({
           stock:
             newStock
@@ -1509,7 +2467,9 @@ async (
         );
 
 
-    if (updateStockError) {
+    if (
+      updateStockError
+    ) {
 
       throw updateStockError;
     }
@@ -1522,14 +2482,16 @@ async (
 
   if (
     mode ===
-    'decrease'
+      'decrease'
   ) {
 
     const {
       error
     } =
       await supabase
-        .from('orders')
+        .from(
+          'orders'
+        )
         .update({
           stock_processed:
             true
@@ -1540,7 +2502,10 @@ async (
         );
 
 
-    if (error) {
+    if (
+      error
+    ) {
+
       throw error;
     }
   }
@@ -1552,14 +2517,16 @@ async (
 
   if (
     mode ===
-    'increase'
+      'increase'
   ) {
 
     const {
       error
     } =
       await supabase
-        .from('orders')
+        .from(
+          'orders'
+        )
         .update({
           stock_restored:
             true
@@ -1570,7 +2537,10 @@ async (
         );
 
 
-    if (error) {
+    if (
+      error
+    ) {
+
       throw error;
     }
   }
