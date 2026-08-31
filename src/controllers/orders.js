@@ -24,13 +24,6 @@ const inMemoryOrdersMap =
    STORE LOCATION
    ========================================================= */
 
-/*
- * Titik asal pengiriman Arume Coffee.
- *
- * MIN 7 Jakarta Barat
- * Cengkareng Timur
- */
-
 const STORE_LOCATION = {
   name:
     'Arume Coffee',
@@ -88,6 +81,109 @@ const normalizeProductId =
 
 
 /* =========================================================
+   ORDER STATUS HELPERS
+   ========================================================= */
+
+const ADMIN_ALLOWED_ORDER_STATUSES =
+  new Set([
+    'pending',
+    'paid',
+    'ready',
+    'completed',
+    'failed',
+    'refunded'
+  ]);
+
+
+/* =========================================================
+   ORDER STATUS LABEL
+   ========================================================= */
+
+const getOrderStatusLabel =
+(status) => {
+
+  const normalizedStatus =
+    String(
+      status || ''
+    )
+      .trim()
+      .toLowerCase();
+
+
+  switch (
+    normalizedStatus
+  ) {
+
+    case 'pending':
+
+      return 'Menunggu Pembayaran';
+
+
+    case 'paid':
+
+      return 'Pesanan Sedang Disiapkan';
+
+
+    case 'ready':
+
+      return 'Pesanan Sudah Siap';
+
+
+    case 'completed':
+
+      return 'Pesanan Selesai';
+
+
+    case 'failed':
+
+      return 'Pembayaran Gagal';
+
+
+    case 'refunded':
+
+      return 'Pembayaran Dikembalikan';
+
+
+    default:
+
+      return 'Status Pesanan';
+  }
+};
+
+
+/* =========================================================
+   ADMIN AUTH
+   ========================================================= */
+
+const isAdminAuthorized =
+(c) => {
+
+  const configuredSecret =
+    String(
+      c.env?.ADMIN_SECRET ||
+      ''
+    );
+
+
+  const providedSecret =
+    String(
+      c.req.header(
+        'X-ADMIN-SECRET'
+      ) ||
+      ''
+    );
+
+
+  return Boolean(
+    configuredSecret &&
+    providedSecret &&
+    configuredSecret ===
+      providedSecret
+  );
+};
+
+
+/* =========================================================
    NUMBER HELPERS
    ========================================================= */
 
@@ -111,13 +207,6 @@ const toFiniteNumber =
 /* =========================================================
    HAVERSINE DISTANCE
    ========================================================= */
-
-/*
- * Menghitung jarak garis lurus
- * antara toko dan customer.
- *
- * Return dalam kilometer.
- */
 
 const calculateDistanceKm =
 (
@@ -253,7 +342,9 @@ async (
       );
 
 
-  if (error) {
+  if (
+    error
+  ) {
 
     console.error(
       'SHIPPING RATE LOOKUP ERROR:',
@@ -271,7 +362,8 @@ async (
     !Array.isArray(
       shippingRates
     ) ||
-    shippingRates.length === 0
+    shippingRates.length ===
+      0
   ) {
 
     throw new Error(
@@ -279,18 +371,6 @@ async (
     );
   }
 
-
-  /*
-   * Contoh:
-   *
-   * 0 - 2 KM
-   * 2 - 5 KM
-   * 5 - 8 KM
-   *
-   * Kalau jarak tepat 2 KM,
-   * tier pertama dipilih karena
-   * list sudah diurutkan max_distance.
-   */
 
   const matchedRate =
     shippingRates.find(
@@ -331,7 +411,9 @@ async (
     );
 
 
-  if (!matchedRate) {
+  if (
+    !matchedRate
+  ) {
 
     return null;
   }
@@ -379,23 +461,6 @@ async (
    NORMALIZE DELIVERY REQUEST
    ========================================================= */
 
-/*
- * Delivery dianggap aktif jika frontend mengirim:
- *
- * {
- *   "delivery": {
- *     "enabled": true,
- *     "address": "...",
- *     "latitude": -6.xxx,
- *     "longitude": 106.xxx
- *   }
- * }
- *
- * Juga support:
- *
- * type: "delivery"
- */
-
 const normalizeDelivery =
 (delivery) => {
 
@@ -440,7 +505,9 @@ const normalizeDelivery =
       'delivery';
 
 
-  if (!enabled) {
+  if (
+    !enabled
+  ) {
 
     return {
       enabled:
@@ -596,6 +663,11 @@ async (
     status:
       order.status,
 
+    status_label:
+      getOrderStatusLabel(
+        order.status
+      ),
+
     customer: {
       name:
         order.customer_name,
@@ -688,6 +760,10 @@ async (
     created_at:
       order.created_at,
 
+    updated_at:
+      order.updated_at ||
+      null,
+
     idempotent:
       true
   };
@@ -722,7 +798,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       1. CHECKOUT ID
+       CHECKOUT ID
        ----------------------------------------------------- */
 
     if (
@@ -739,7 +815,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       2. CUSTOMER
+       CUSTOMER
        ----------------------------------------------------- */
 
     if (
@@ -760,7 +836,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       3. ITEMS
+       ITEMS
        ----------------------------------------------------- */
 
     if (
@@ -781,7 +857,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       4. SUPABASE
+       SUPABASE
        ----------------------------------------------------- */
 
     const supabase =
@@ -804,7 +880,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       5. IDEMPOTENT CHECKOUT
+       IDEMPOTENT CHECKOUT
        ----------------------------------------------------- */
 
     const {
@@ -860,7 +936,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       6. NORMALIZE PRODUCT IDS
+       NORMALIZE PRODUCT IDS
        ----------------------------------------------------- */
 
     const productIds =
@@ -868,13 +944,11 @@ async (c) => {
         new Set(
           items
             .map(
-              (item) => {
-
-                return normalizeProductId(
+              (item) =>
+                normalizeProductId(
                   item.product_id ||
                   item.id
-                );
-              }
+                )
             )
             .filter(
               Boolean
@@ -884,7 +958,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       7. LOAD PRODUCTS
+       LOAD PRODUCTS
        ----------------------------------------------------- */
 
     const dbProducts =
@@ -900,20 +974,17 @@ async (c) => {
           (
             product
           ) => [
-
             String(
               product.id
             ),
-
             product
-
           ]
         )
       );
 
 
     /* -----------------------------------------------------
-       8. VALIDATE PRODUCTS
+       VALIDATE PRODUCTS
        ----------------------------------------------------- */
 
     let calculatedSubtotal =
@@ -1038,10 +1109,6 @@ async (c) => {
       }
 
 
-      /* ---------------------------------------------------
-         STOCK VALIDATION
-         --------------------------------------------------- */
-
       const stock =
         Number(
           dbProduct.stock
@@ -1064,10 +1131,6 @@ async (c) => {
         );
       }
 
-
-      /* ---------------------------------------------------
-         TRUSTED PRICE FROM DATABASE
-         --------------------------------------------------- */
 
       const unitPrice =
         Number(
@@ -1121,7 +1184,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       9. DELIVERY / SHIPPING
+       DELIVERY / SHIPPING
        ----------------------------------------------------- */
 
     const normalizedDelivery =
@@ -1142,24 +1205,14 @@ async (c) => {
       null;
 
 
-    /*
-     * PICKUP
-     */
-
     if (
       !normalizedDelivery.enabled
     ) {
 
       shippingFee =
         0;
-    }
 
-
-    /*
-     * DELIVERY
-     */
-
-    else {
+    } else {
 
       if (
         !normalizedDelivery.address
@@ -1224,15 +1277,10 @@ async (c) => {
 
       const rawDistance =
         calculateDistanceKm(
-
           STORE_LOCATION.latitude,
-
           STORE_LOCATION.longitude,
-
           normalizedDelivery.latitude,
-
           normalizedDelivery.longitude
-
         );
 
 
@@ -1283,7 +1331,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       10. CALCULATE TRUSTED TOTAL
+       TRUSTED TOTAL
        ----------------------------------------------------- */
 
     const calculatedTotalAmount =
@@ -1292,7 +1340,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       11. ORDER NUMBER
+       ORDER NUMBER
        ----------------------------------------------------- */
 
     const orderNumber =
@@ -1304,7 +1352,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       12. SAVE CUSTOMER HISTORY
+       CUSTOMER HISTORY
        ----------------------------------------------------- */
 
     const {
@@ -1349,7 +1397,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       13. CREATE ORDER
+       CREATE ORDER
        ----------------------------------------------------- */
 
     const {
@@ -1388,11 +1436,6 @@ async (c) => {
                 ).trim()
               : null,
 
-
-          /* -----------------------------------------------
-             PRICE
-             ----------------------------------------------- */
-
           subtotal_amount:
             calculatedSubtotal,
 
@@ -1401,11 +1444,6 @@ async (c) => {
 
           total_amount:
             calculatedTotalAmount,
-
-
-          /* -----------------------------------------------
-             DELIVERY
-             ----------------------------------------------- */
 
           delivery_type:
             normalizedDelivery.enabled
@@ -1431,11 +1469,6 @@ async (c) => {
             normalizedDelivery.enabled
               ? deliveryDistanceKm
               : null,
-
-
-          /* -----------------------------------------------
-             ORDER STATUS
-             ----------------------------------------------- */
 
           status:
             'pending',
@@ -1471,10 +1504,6 @@ async (c) => {
         .select()
         .single();
 
-
-    /* -----------------------------------------------------
-       ORDER INSERT ERROR
-       ----------------------------------------------------- */
 
     if (
       orderError
@@ -1534,7 +1563,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       14. SAVE ORDER ITEMS
+       SAVE ORDER ITEMS
        ----------------------------------------------------- */
 
     const orderItemsPayload =
@@ -1613,7 +1642,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       15. FINAL ORDER RESPONSE
+       FINAL RESPONSE
        ----------------------------------------------------- */
 
     const finalOrderResponse = {
@@ -1633,6 +1662,11 @@ async (c) => {
 
       status:
         'pending',
+
+      status_label:
+        getOrderStatusLabel(
+          'pending'
+        ),
 
       customer: {
         name:
@@ -1727,7 +1761,11 @@ async (c) => {
       created_at:
         orderData.created_at ||
         new Date()
-          .toISOString()
+          .toISOString(),
+
+      updated_at:
+        orderData.updated_at ||
+        null
     };
 
 
@@ -1910,6 +1948,11 @@ async (c) => {
           {
             ...order,
 
+            status_label:
+              getOrderStatusLabel(
+                order.status
+              ),
+
             subtotal_amount:
               Number(
                 order.subtotal_amount ??
@@ -2041,6 +2084,12 @@ async (c) => {
     err
   ) {
 
+    console.error(
+      'Get Order Error:',
+      err
+    );
+
+
     return errorResponse(
       c,
       'Failed to fetch order details',
@@ -2056,18 +2105,6 @@ async (c) => {
    PUBLIC ORDER STATUS
    GET /api/order-status/:orderNumber
    ========================================================= */
-
-/*
- * Endpoint ini sengaja hanya mengembalikan
- * data status yang aman ditampilkan ke customer.
- *
- * Tidak mengembalikan:
- * email
- * phone
- * alamat
- * koordinat
- * payment raw data
- */
 
 export const getPublicOrderStatus =
 async (c) => {
@@ -2267,10 +2304,6 @@ async (c) => {
 
   try {
 
-    /* -----------------------------------------------------
-       ADMIN AUTH
-       ----------------------------------------------------- */
-
     if (
       !isAdminAuthorized(
         c
@@ -2285,10 +2318,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       SUPABASE
-       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -2308,10 +2337,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       LOAD ORDERS
-       ----------------------------------------------------- */
 
     const {
       data:
@@ -2388,10 +2413,6 @@ async (c) => {
         : [];
 
 
-    /* -----------------------------------------------------
-       NO ORDERS
-       ----------------------------------------------------- */
-
     if (
       safeOrders.length ===
       0
@@ -2407,10 +2428,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       LOAD ORDER ITEMS
-       ----------------------------------------------------- */
 
     const orderNumbers =
       safeOrders
@@ -2479,10 +2496,6 @@ async (c) => {
       }
     }
 
-
-    /* -----------------------------------------------------
-       MERGE ITEMS
-       ----------------------------------------------------- */
 
     const result =
       safeOrders.map(
@@ -2589,10 +2602,6 @@ async (c) => {
 
   try {
 
-    /* -----------------------------------------------------
-       ADMIN AUTH
-       ----------------------------------------------------- */
-
     if (
       !isAdminAuthorized(
         c
@@ -2607,10 +2616,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       ORDER NUMBER
-       ----------------------------------------------------- */
 
     const orderNumber =
       String(
@@ -2634,10 +2639,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       BODY
-       ----------------------------------------------------- */
-
     const body =
       await c.req
         .json()
@@ -2655,10 +2656,6 @@ async (c) => {
         .toLowerCase();
 
 
-    /* -----------------------------------------------------
-       STATUS VALIDATION
-       ----------------------------------------------------- */
-
     if (
       !ADMIN_ALLOWED_ORDER_STATUSES.has(
         status
@@ -2673,10 +2670,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       SUPABASE
-       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -2696,10 +2689,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       FIND ORDER
-       ----------------------------------------------------- */
 
     const {
       data:
@@ -2760,13 +2749,14 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       IMPORTANT SECURITY
+    const currentStatus =
+      String(
+        currentOrder.status ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
 
-       Jangan sampai admin secara tidak sengaja
-       menandai order pending sebagai ready/completed
-       padahal belum dibayar.
-       ----------------------------------------------------- */
 
     if (
       (
@@ -2776,9 +2766,9 @@ async (c) => {
           'completed'
       ) &&
       (
-        currentOrder.status ===
+        currentStatus ===
           'pending' ||
-        currentOrder.status ===
+        currentStatus ===
           'failed'
       )
     ) {
@@ -2792,12 +2782,8 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       IDEMPOTENT STATUS
-       ----------------------------------------------------- */
-
     if (
-      currentOrder.status ===
+      currentStatus ===
       status
     ) {
 
@@ -2821,10 +2807,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       UPDATE
-       ----------------------------------------------------- */
 
     const now =
       new Date()
@@ -2885,10 +2867,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       MEMORY FALLBACK SYNC
-       ----------------------------------------------------- */
-
     if (
       inMemoryOrdersMap.has(
         orderNumber
@@ -2908,16 +2886,17 @@ async (c) => {
 
           status,
 
+          status_label:
+            getOrderStatusLabel(
+              status
+            ),
+
           updated_at:
             now
         }
       );
     }
 
-
-    /* -----------------------------------------------------
-       RESPONSE
-       ----------------------------------------------------- */
 
     return successResponse(
       c,
@@ -2978,6 +2957,20 @@ async (
     );
 
 
+  const normalizedStatus =
+    String(
+      newStatus ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+
+  const now =
+    new Date()
+      .toISOString();
+
+
   /* -------------------------------------------------------
      MEMORY
      ------------------------------------------------------- */
@@ -3000,14 +2993,18 @@ async (
         ...existing,
 
         status:
-          newStatus,
+          normalizedStatus,
+
+        status_label:
+          getOrderStatusLabel(
+            normalizedStatus
+          ),
 
         payment_details:
           paymentDetails,
 
         updated_at:
-          new Date()
-            .toISOString()
+          now
       }
     );
   }
@@ -3021,449 +3018,34 @@ async (
     supabase
   ) {
 
-    const {
-      error
-    } =
-      await supabase
-        .from(
-          'orders'
-        )
-        .update({
-          status:
-            newStatus,
+    const updatePayload = {
+      status:
+        normalizedStatus,
 
-          updated_at:
-            new Date()
-              .toISOString()
-        })
-        .eq(
-          'order_number',
-          orderNumber
-        );
-
-
-    if (
-      error
-    ) {
-
-      console.error(
-        'UPDATE ORDER STATUS ERROR:',
-        error
-      );
-
-
-      throw error;
-    }
-  }
-};
-
-
-/* =========================================================
-   STOCK MANAGEMENT
-   ========================================================= */
-
-/*
- * mode:
- *
- * decrease = payment successful
- * increase = refund
- */
-
-export const adjustStockForOrder =
-async (
-  env,
-  orderNumber,
-  mode = 'decrease'
-) => {
-
-  const supabase =
-    getSupabaseClient(
-      env
-    );
-
-
-  if (
-    !supabase
-  ) {
-
-    throw new Error(
-      'Supabase unavailable'
-    );
-  }
-
-
-  if (
-    mode !==
-      'decrease' &&
-    mode !==
-      'increase'
-  ) {
-
-    throw new Error(
-      `Invalid stock mode '${mode}'`
-    );
-  }
-
-
-  /* -------------------------------------------------------
-     FIND ORDER
-     ------------------------------------------------------- */
-
-  const {
-    data:
-      order,
-
-    error:
-      orderError
-  } =
-    await supabase
-      .from(
-        'orders'
-      )
-      .select(`
-        id,
-        order_number,
-        stock_processed,
-        stock_restored
-      `)
-      .eq(
-        'order_number',
-        orderNumber
-      )
-      .maybeSingle();
-
-
-  if (
-    orderError ||
-    !order
-  ) {
-
-    throw new Error(
-      `Order '${orderNumber}' not found`
-    );
-  }
-
-
-  /* -------------------------------------------------------
-     PREVENT DOUBLE DEDUCTION
-     ------------------------------------------------------- */
-
-  if (
-    mode ===
-      'decrease' &&
-    order.stock_processed
-  ) {
-
-    return {
-      success:
-        true,
-
-      skipped:
-        true,
-
-      reason:
-        'Stock already deducted'
+      updated_at:
+        now
     };
-  }
 
 
-  /* -------------------------------------------------------
-     PREVENT DOUBLE RESTORE
-     ------------------------------------------------------- */
-
-  if (
-    mode ===
-      'increase' &&
-    order.stock_restored
-  ) {
-
-    return {
-      success:
-        true,
-
-      skipped:
-        true,
-
-      reason:
-        'Stock already restored'
-    };
-  }
-
-
-  /* -------------------------------------------------------
-     GET ORDER ITEMS
-     ------------------------------------------------------- */
-
-  const {
-    data:
-      items,
-
-    error:
-      itemsError
-  } =
-    await supabase
-      .from(
-        'order_items'
-      )
-      .select(
-        'product_id, quantity'
-      )
-      .eq(
-        'order_number',
-        orderNumber
-      );
-
-
-  if (
-    itemsError
-  ) {
-
-    throw itemsError;
-  }
-
-
-  if (
-    !items ||
-    items.length ===
-      0
-  ) {
-
-    throw new Error(
-      `No order items found for '${orderNumber}'`
-    );
-  }
-
-
-  /* -------------------------------------------------------
-     UPDATE EACH PRODUCT
-     ------------------------------------------------------- */
-
-  for (
-    const item of items
-  ) {
-
-    const productId =
-      normalizeProductId(
-        item.product_id
-      );
-
-
-    const {
-      data:
-        product,
-
-      error:
-        productError
-    } =
-      await supabase
-        .from(
-          'products'
-        )
-        .select(
-          'id, stock'
-        )
-        .eq(
-          'id',
-          productId
-        )
-        .maybeSingle();
-
+    /*
+     * Kalau payment sukses dan paid_at
+     * belum diberikan dari payment controller,
+     * isi timestamp sekarang.
+     */
 
     if (
-      productError ||
-      !product
+      normalizedStatus ===
+      'paid'
     ) {
 
-      throw new Error(
-        `Product '${productId}' not found`
-      );
+      updatePayload.paid_at =
+        paymentDetails?.paid_at ||
+        now;
     }
 
-
-    const qty =
-      Number(
-        item.quantity
-      );
-
-
-    if (
-      !Number.isFinite(
-        qty
-      ) ||
-      qty <=
-        0
-    ) {
-
-      continue;
-    }
-
-
-    const currentStock =
-      Number(
-        product.stock
-      );
-
-
-    if (
-      !Number.isFinite(
-        currentStock
-      )
-    ) {
-
-      throw new Error(
-        `Invalid stock for '${productId}'`
-      );
-    }
-
-
-    let newStock;
-
-
-    /* -----------------------------------------------------
-       DECREASE
-       ----------------------------------------------------- */
-
-    if (
-      mode ===
-      'decrease'
-    ) {
-
-      if (
-        currentStock <
-        qty
-      ) {
-
-        throw new Error(
-          `Stok tidak mencukupi untuk '${productId}'. Tersedia ${currentStock}, diminta ${qty}`
-        );
-      }
-
-
-      newStock =
-        currentStock -
-        qty;
-    }
-
-
-    /* -----------------------------------------------------
-       INCREASE
-       ----------------------------------------------------- */
-
-    else {
-
-      newStock =
-        currentStock +
-        qty;
-    }
-
-
-    const {
-      error:
-        updateStockError
-    } =
-      await supabase
-        .from(
-          'products'
-        )
-        .update({
-          stock:
-            newStock
-        })
-        .eq(
-          'id',
-          productId
-        );
-
-
-    if (
-      updateStockError
-    ) {
-
-      throw updateStockError;
-    }
-  }
-
-
-  /* -------------------------------------------------------
-     MARK STOCK PROCESSED
-     ------------------------------------------------------- */
-
-  if (
-    mode ===
-      'decrease'
-  ) {
 
     const {
       error
     } =
       await supabase
-        .from(
-          'orders'
-        )
-        .update({
-          stock_processed:
-            true
-        })
-        .eq(
-          'order_number',
-          orderNumber
-        );
-
-
-    if (
-      error
-    ) {
-
-      throw error;
-    }
-  }
-
-
-  /* -------------------------------------------------------
-     MARK STOCK RESTORED
-     ------------------------------------------------------- */
-
-  if (
-    mode ===
-      'increase'
-  ) {
-
-    const {
-      error
-    } =
-      await supabase
-        .from(
-          'orders'
-        )
-        .update({
-          stock_restored:
-            true
-        })
-        .eq(
-          'order_number',
-          orderNumber
-        );
-
-
-    if (
-      error
-    ) {
-
-      throw error;
-    }
-  }
-
-
-  return {
-    success:
-      true,
-
-    skipped:
-      false,
-
-    mode,
-
-    order_number:
-      orderNumber
-  };
-};
+       
