@@ -13,7 +13,10 @@ import {
 
 import {
   createOrder,
-  getOrderByNumber
+  getOrderByNumber,
+  getPublicOrderStatus,
+  getAdminOrders,
+  updateAdminOrderStatus
 } from './controllers/orders.js';
 
 import {
@@ -359,7 +362,13 @@ app.get(
           isSupabaseConfigured,
 
         admin_configured:
-          isAdminConfigured
+          isAdminConfigured,
+
+        shipping_api:
+          true,
+
+        order_status_api:
+          true
 
       },
 
@@ -389,14 +398,6 @@ app.get(
 /* =========================================================
    ADMIN PRODUCT / STOCK ROUTES
    ========================================================= */
-
-/*
- * GET ADMIN PRODUCTS
- *
- * Header:
- *
- * X-ADMIN-SECRET: password-admin
- */
 
 app.get(
   '/api/admin/products',
@@ -540,11 +541,9 @@ app.get(
 );
 
 
-/*
- * UPDATE STOCK
- *
- * PATCH /api/admin/products/:id
- */
+/* =========================================================
+   UPDATE STOCK
+   ========================================================= */
 
 app.patch(
   '/api/admin/products/:id',
@@ -763,16 +762,6 @@ app.patch(
    4. SHIPPING ROUTES
    ========================================================= */
 
-/*
- * PUBLIC SHIPPING RATES
- *
- * GET /api/shipping
- *
- * Dipakai frontend customer.
- *
- * Hanya mengembalikan tarif aktif.
- */
-
 app.get(
   '/api/shipping',
   async (c) => {
@@ -898,16 +887,6 @@ app.get(
 /* =========================================================
    ADMIN SHIPPING ROUTES
    ========================================================= */
-
-/*
- * GET ALL SHIPPING SETTINGS
- *
- * GET /api/admin/shipping
- *
- * Header:
- *
- * X-ADMIN-SECRET: password-admin
- */
 
 app.get(
   '/api/admin/shipping',
@@ -1051,24 +1030,9 @@ app.get(
 );
 
 
-/*
- * UPDATE SHIPPING RATE
- *
- * PUT /api/admin/shipping/:id
- *
- * Header:
- *
- * X-ADMIN-SECRET: password-admin
- *
- * Body example:
- *
- * {
- *   "min_distance": 0,
- *   "max_distance": 2,
- *   "fee": 5000,
- *   "active": true
- * }
- */
+/* =========================================================
+   UPDATE SHIPPING RATE
+   ========================================================= */
 
 app.put(
   '/api/admin/shipping/:id',
@@ -1145,10 +1109,6 @@ app.put(
               body.active
             );
 
-
-      /* =====================================================
-         VALIDATION
-         ===================================================== */
 
       if (
 
@@ -1388,11 +1348,20 @@ app.put(
    5. ORDER ROUTES
    ========================================================= */
 
+
+/* ---------------------------------------------------------
+   CREATE ORDER
+   --------------------------------------------------------- */
+
 app.post(
   '/api/orders',
   createOrder
 );
 
+
+/* ---------------------------------------------------------
+   GET FULL ORDER
+   --------------------------------------------------------- */
 
 app.get(
   '/api/orders/:orderNumber',
@@ -1400,13 +1369,69 @@ app.get(
 );
 
 
+/* ---------------------------------------------------------
+   PUBLIC CUSTOMER ORDER STATUS
+   --------------------------------------------------------- */
+
+/*
+ * Endpoint customer.
+ *
+ * Contoh:
+ *
+ * GET
+ * /api/order-status/ARC-123456789-1234
+ */
+
+app.get(
+  '/api/order-status/:orderNumber',
+  getPublicOrderStatus
+);
+
+
 /* =========================================================
-   6. PAYMENT ROUTES
+   ADMIN ORDER ROUTES
    ========================================================= */
 
 /*
- * Membuat Xendit Payment Session
+ * GET SEMUA PESANAN
+ *
+ * Header:
+ *
+ * X-ADMIN-SECRET: password-admin
  */
+
+app.get(
+  '/api/admin/orders',
+  getAdminOrders
+);
+
+
+/*
+ * UPDATE STATUS PESANAN
+ *
+ * PATCH
+ * /api/admin/orders/:orderNumber/status
+ *
+ * Header:
+ *
+ * X-ADMIN-SECRET: password-admin
+ *
+ * Body:
+ *
+ * {
+ *   "status": "ready"
+ * }
+ */
+
+app.patch(
+  '/api/admin/orders/:orderNumber/status',
+  updateAdminOrderStatus
+);
+
+
+/* =========================================================
+   6. PAYMENT ROUTES
+   ========================================================= */
 
 app.post(
   '/api/payment/create',
@@ -1414,22 +1439,11 @@ app.post(
 );
 
 
-/*
- * Webhook Xendit.
- *
- * Payment Session Completed
- * Payment Session Expired
- */
-
 app.post(
   '/api/payment/callback',
   handlePaymentCallback
 );
 
-
-/*
- * Cek status payment/order
- */
 
 app.post(
   '/api/payment/check',
@@ -1450,11 +1464,6 @@ app.get(
         'accept'
       ) || '';
 
-
-    /*
-     * Kalau request meminta JSON,
-     * return informasi API.
-     */
 
     if (
 
@@ -1480,10 +1489,16 @@ app.get(
           'Hono',
 
         version:
-          '1.3.0',
+          '1.4.0',
 
         payment_gateway:
           'Xendit',
+
+        shipping:
+          true,
+
+        order_status:
+          true,
 
         documentation:
           '/api/health'
@@ -1491,10 +1506,6 @@ app.get(
       });
     }
 
-
-    /* -----------------------------------------------------
-       ENVIRONMENT STATUS
-       ----------------------------------------------------- */
 
     const isXenditConfigured =
       Boolean(
@@ -1546,10 +1557,6 @@ app.get(
       c.env?.FRONTEND_URL ||
       'https://arumeya.com';
 
-
-    /* -----------------------------------------------------
-       CONTROL CENTER HTML
-       ----------------------------------------------------- */
 
     const htmlContent = `
 <!doctype html>
@@ -1621,8 +1628,6 @@ app.get(
     "
   >
 
-
-    <!-- HEADER -->
 
     <header
       class="
@@ -1728,8 +1733,6 @@ app.get(
     </header>
 
 
-    <!-- MAIN -->
-
     <main
       class="p-6"
     >
@@ -1826,6 +1829,22 @@ app.get(
 
 
         <p>
+          Order Status API:
+          <strong>
+            Enabled
+          </strong>
+        </p>
+
+
+        <p>
+          Admin Orders API:
+          <strong>
+            Enabled
+          </strong>
+        </p>
+
+
+        <p>
           Frontend:
           <strong>
             ${frontendUrl}
@@ -1864,7 +1883,9 @@ app.get(
           Supabase //
           Xendit //
           Admin Stock API //
-          Shipping API
+          Shipping API //
+          Order Status API //
+          Admin Orders API
         </p>
 
       </div>
