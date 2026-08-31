@@ -27,6 +27,63 @@ const app = new Hono();
 
 
 /* =========================================================
+   ADMIN HELPERS
+   ========================================================= */
+
+const isAdminAuthorized = (c) => {
+  const configuredSecret =
+    c.env?.ADMIN_SECRET || '';
+
+  const providedSecret =
+    c.req.header('X-ADMIN-SECRET') || '';
+
+  return Boolean(
+    configuredSecret &&
+    providedSecret &&
+    configuredSecret === providedSecret
+  );
+};
+
+
+const getSupabaseHeaders = (env) => ({
+  apikey:
+    env.SUPABASE_SERVICE_ROLE_KEY,
+
+  Authorization:
+    `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+
+  'Content-Type':
+    'application/json'
+});
+
+
+const ensureAdminEnvironment = (c) => {
+  if (
+    !c.env?.SUPABASE_URL ||
+    !c.env?.SUPABASE_SERVICE_ROLE_KEY
+  ) {
+    return errorResponse(
+      c,
+      'Supabase configuration missing',
+      'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not configured',
+      500
+    );
+  }
+
+  if (!c.env?.ADMIN_SECRET) {
+    return errorResponse(
+      c,
+      'Admin configuration missing',
+      'ADMIN_SECRET is not configured',
+      500
+    );
+  }
+
+  return null;
+};
+
+
+/* =========================================================
    1. CORS
    ========================================================= */
 
@@ -36,9 +93,8 @@ app.use(
     origin: (origin) => {
 
       /*
-       * Server-to-server request
-       * seperti webhook Xendit biasanya
-       * tidak membawa Origin.
+       * Server-to-server request seperti webhook Xendit
+       * biasanya tidak membawa Origin.
        */
       if (!origin) {
         return '*';
@@ -96,6 +152,7 @@ app.use(
       'GET',
       'POST',
       'PUT',
+      'PATCH',
       'DELETE',
       'OPTIONS'
     ],
@@ -106,12 +163,8 @@ app.use(
       'Authorization',
       'X-Requested-With',
       'Accept',
-
-      /*
-       * Tidak wajib untuk webhook masuk,
-       * tapi aman bila nanti dibutuhkan.
-       */
-      'X-CALLBACK-TOKEN'
+      'X-CALLBACK-TOKEN',
+      'X-ADMIN-SECRET'
     ],
 
 
@@ -179,6 +232,15 @@ app.get(
       );
 
 
+    const isAdminConfigured =
+      Boolean(
+        c.env?.ADMIN_SECRET &&
+        c.env.ADMIN_SECRET
+          .trim()
+          .length > 0
+      );
+
+
     return successResponse(
       c,
       {
@@ -205,7 +267,10 @@ app.get(
           isXenditWebhookConfigured,
 
         supabase_configured:
-          isSupabaseConfigured
+          isSupabaseConfigured,
+
+        admin_configured:
+          isAdminConfigured
       },
       'Arume Coffee API is running and healthy'
     );
@@ -230,6 +295,281 @@ app.get(
 
 
 /* =========================================================
+   ADMIN PRODUCT / STOCK ROUTES
+   ========================================================= */
+
+/*
+ * GET ADMIN PRODUCTS
+ *
+ * Header:
+ *
+ * X-ADMIN-SECRET: password-admin
+ */
+
+app.get(
+  '/api/admin/products',
+  async (c) => {
+
+    const environmentError =
+      ensureAdminEnvironment(c);
+
+    if (environmentError) {
+      return environmentError;
+    }
+
+
+    if (!isAdminAuthorized(c)) {
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    try {
+
+      const supabaseUrl =
+        c.env.SUPABASE_URL.replace(
+          /\/$/,
+          ''
+        );
+
+
+      const response =
+        await fetch(
+          `${supabaseUrl}/rest/v1/products?select=id,name,price,stock,image_url,category&order=name.asc`,
+          {
+            method:
+              'GET',
+
+            headers:
+              getSupabaseHeaders(
+                c.env
+              )
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (!response.ok) {
+
+        console.error(
+          'Admin products Supabase error:',
+          data
+        );
+
+
+        return errorResponse(
+          c,
+          'Failed to load products',
+          data?.message ||
+            'Supabase request failed',
+          response.status
+        );
+      }
+
+
+      return successResponse(
+        c,
+        {
+          products:
+            Array.isArray(data)
+              ? data
+              : []
+        },
+        'Admin products loaded successfully'
+      );
+
+    } catch (err) {
+
+      console.error(
+        'Admin products error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to load products',
+        err?.message ||
+          'An unexpected error occurred',
+        500
+      );
+    }
+  }
+);
+
+
+/*
+ * UPDATE STOCK
+ *
+ * PATCH /api/admin/products/:id
+ *
+ * Header:
+ *
+ * X-ADMIN-SECRET: password-admin
+ *
+ * Body:
+ *
+ * {
+ *   "stock": 10
+ * }
+ */
+
+app.patch(
+  '/api/admin/products/:id',
+  async (c) => {
+
+    const environmentError =
+      ensureAdminEnvironment(c);
+
+    if (environmentError) {
+      return environmentError;
+    }
+
+
+    if (!isAdminAuthorized(c)) {
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    try {
+
+      const productId =
+        c.req.param(
+          'id'
+        );
+
+
+      const body =
+        await c.req.json();
+
+
+      const stock =
+        Number(
+          body?.stock
+        );
+
+
+      if (
+        !Number.isInteger(stock) ||
+        stock < 0
+      ) {
+        return errorResponse(
+          c,
+          'Invalid stock',
+          'Stock must be an integer greater than or equal to 0',
+          400
+        );
+      }
+
+
+      const supabaseUrl =
+        c.env.SUPABASE_URL.replace(
+          /\/$/,
+          ''
+        );
+
+
+      const response =
+        await fetch(
+          `${supabaseUrl}/rest/v1/products?id=eq.${encodeURIComponent(productId)}`,
+          {
+            method:
+              'PATCH',
+
+            headers: {
+              ...getSupabaseHeaders(
+                c.env
+              ),
+
+              Prefer:
+                'return=representation'
+            },
+
+            body:
+              JSON.stringify({
+                stock
+              })
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (!response.ok) {
+
+        console.error(
+          'Update stock Supabase error:',
+          data
+        );
+
+
+        return errorResponse(
+          c,
+          'Failed to update stock',
+          data?.message ||
+            'Supabase request failed',
+          response.status
+        );
+      }
+
+
+      if (
+        !Array.isArray(data) ||
+        data.length === 0
+      ) {
+        return errorResponse(
+          c,
+          'Product not found',
+          `Product '${productId}' was not found`,
+          404
+        );
+      }
+
+
+      return successResponse(
+        c,
+        {
+          product:
+            data[0]
+        },
+        'Stock updated successfully'
+      );
+
+    } catch (err) {
+
+      console.error(
+        'Update stock error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to update stock',
+        err?.message ||
+          'An unexpected error occurred',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
    4. ORDER ROUTES
    ========================================================= */
 
@@ -249,10 +589,10 @@ app.get(
    5. PAYMENT ROUTES
    ========================================================= */
 
-
 /*
  * Membuat Xendit Payment Session
  */
+
 app.post(
   '/api/payment/create',
   createPayment
@@ -267,6 +607,7 @@ app.post(
  *
  * Keduanya diarahkan ke endpoint ini.
  */
+
 app.post(
   '/api/payment/callback',
   handlePaymentCallback
@@ -276,6 +617,7 @@ app.post(
 /*
  * Cek status payment/order
  */
+
 app.post(
   '/api/payment/check',
   checkPaymentStatus
@@ -300,6 +642,7 @@ app.get(
      * Kalau request meminta JSON,
      * return informasi API.
      */
+
     if (
       acceptHeader.includes(
         'application/json'
@@ -321,7 +664,7 @@ app.get(
           'Hono',
 
         version:
-          '1.1.0',
+          '1.2.0',
 
         payment_gateway:
           'Xendit',
@@ -358,6 +701,15 @@ app.get(
       Boolean(
         c.env?.SUPABASE_URL &&
         c.env?.SUPABASE_SERVICE_ROLE_KEY
+      );
+
+
+    const isAdminConfigured =
+      Boolean(
+        c.env?.ADMIN_SECRET &&
+        c.env.ADMIN_SECRET
+          .trim()
+          .length > 0
       );
 
 
@@ -625,6 +977,18 @@ app.get(
 
 
         <p>
+          Admin API:
+          <strong>
+            ${
+              isAdminConfigured
+                ? 'Configured'
+                : 'Not Configured'
+            }
+          </strong>
+        </p>
+
+
+        <p>
           Frontend:
           <strong>
             ${frontendUrl}
@@ -661,7 +1025,8 @@ app.get(
         >
           Cloudflare Workers //
           Supabase //
-          Xendit
+          Xendit //
+          Admin Stock API
         </p>
 
       </div>
