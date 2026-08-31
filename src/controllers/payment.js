@@ -21,12 +21,80 @@ import {
 
 /*
  * Runtime cache.
- *
- * Ini cuma lapisan tambahan.
+ * Hanya lapisan tambahan.
  * Idempotency utama tetap database.
  */
-const processedCallbackMap =
-  new Map();
+const processedCallbackMap = new Map();
+
+
+/* =========================================================
+   HELPER
+   ========================================================= */
+
+const normalizeEvent = (event) => {
+  return String(event || '').trim().toLowerCase();
+};
+
+
+const getPaymentMethod = (data = {}) => {
+
+  const candidate =
+    data?.payment_method?.type ||
+    data?.payment_method?.channel_code ||
+    data?.payment_method?.channel_properties?.channel_code ||
+    data?.channel_code ||
+    data?.payment_channel ||
+    null;
+
+  if (!candidate) {
+    return null;
+  }
+
+  if (typeof candidate === 'string') {
+    return candidate;
+  }
+
+  try {
+    return JSON.stringify(candidate);
+  } catch {
+    return 'xendit';
+  }
+};
+
+
+/*
+ * reference_id yang kita kirim ke Xendit
+ * harus sebisa mungkin sama dengan order_number.
+ *
+ * Helper ini juga menerima reference_id lama
+ * kalau sebelumnya kita pernah membuat format
+ * ORDERNUMBER-timestamp.
+ */
+const extractPossibleOrderNumber = (
+  referenceId
+) => {
+
+  if (!referenceId) {
+    return null;
+  }
+
+  const ref =
+    String(referenceId).trim();
+
+  if (!ref) {
+    return null;
+  }
+
+  /*
+   * Prioritas:
+   * reference_id langsung dianggap
+   * sebagai order_number.
+   *
+   * Nanti lookup database akan memastikan
+   * apakah benar ada order tersebut.
+   */
+  return ref;
+};
 
 
 /* =========================================================
@@ -91,13 +159,21 @@ async (c) => {
           'order_number',
           order_number
         )
-        .single();
+        .maybeSingle();
 
 
     if (orderError) {
+
       console.error(
         'Failed to find order:',
         orderError
+      );
+
+      return errorResponse(
+        c,
+        'Failed to find order',
+        orderError.message,
+        500
       );
     }
 
@@ -129,23 +205,14 @@ async (c) => {
     }
 
 
-    /*
-     * Kalau order pending dan masih punya
-     * Xendit payment URL,
-     * gunakan link existing.
-     *
-     * payment_id kita gunakan untuk
-     * menyimpan payment_session_id.
-     */
+    /* -----------------------------------------------------
+       REUSE EXISTING SESSION
+       ----------------------------------------------------- */
+
     if (
-      orderRecord.status ===
-        'pending' &&
-
-      orderRecord.payment_provider ===
-        'xendit' &&
-
+      orderRecord.status === 'pending' &&
+      orderRecord.payment_provider === 'xendit' &&
       orderRecord.payment_id &&
-
       orderRecord.payment_url
     ) {
 
@@ -155,8 +222,7 @@ async (c) => {
           order_number,
 
           payment: {
-            provider:
-              'xendit',
+            provider: 'xendit',
 
             session_id:
               orderRecord.payment_id,
@@ -167,8 +233,7 @@ async (c) => {
             payment_link_url:
               orderRecord.payment_url,
 
-            reused:
-              true
+            reused: true
           }
         },
         'Existing Xendit payment session returned'
@@ -232,6 +297,26 @@ async (c) => {
       );
 
 
+    if (
+      !paymentResult ||
+      !paymentResult.session_id ||
+      !paymentResult.redirect_url
+    ) {
+
+      console.error(
+        'Invalid Xendit payment result:',
+        paymentResult
+      );
+
+      return errorResponse(
+        c,
+        'Invalid response from Xendit',
+        paymentResult,
+        502
+      );
+    }
+
+
     /* -----------------------------------------------------
        SAVE PAYMENT SESSION
        ----------------------------------------------------- */
@@ -246,21 +331,14 @@ async (c) => {
             'xendit',
 
           payment_id:
-            paymentResult
-              .session_id,
+            paymentResult.session_id,
 
           payment_url:
-            paymentResult
-              .redirect_url,
+            paymentResult.redirect_url,
 
           payment_method:
             null,
 
-          /*
-           * Midtrans field lama.
-           *
-           * Jangan dipakai untuk Xendit.
-           */
           snap_token:
             null
         })
@@ -271,9 +349,17 @@ async (c) => {
 
 
     if (updateError) {
+
       console.error(
         'Failed saving Xendit payment session:',
         updateError
+      );
+
+      return errorResponse(
+        c,
+        'Payment created but failed to save payment session',
+        updateError.message,
+        500
       );
     }
 
@@ -301,7 +387,7 @@ async (c) => {
     return errorResponse(
       c,
       'Failed to create payment transaction',
-      err.message || err,
+      err?.message || err,
       500
     );
   }
@@ -319,7 +405,7 @@ async (c) => {
   try {
 
     /* -----------------------------------------------------
-       1. VERIFY CALLBACK TOKEN
+       1. VERIFY WEBHOOK TOKEN
        ----------------------------------------------------- */
 
     const callbackToken =
@@ -336,6 +422,11 @@ async (c) => {
 
 
     if (!isValid) {
+
+      console.error(
+        'Invalid Xendit callback token'
+      );
+
       return errorResponse(
         c,
         'Invalid Xendit webhook token',
@@ -344,6 +435,10 @@ async (c) => {
       );
     }
 
+
+    /* -----------------------------------------------------
+       2. READ PAYLOAD
+       ----------------------------------------------------- */
 
     const body =
       await c.req
@@ -358,52 +453,85 @@ async (c) => {
 
 
     const event =
-      body.event ||
-      'unknown';
+      normalizeEvent(
+        body?.event
+      );
 
 
     const data =
-      body.data ||
-      {};
+      body?.data || {};
 
-
-    /* -----------------------------------------------------
-       2. ORDER REFERENCE
-       ----------------------------------------------------- */
 
     /*
-     * Session reference_id kita buat:
+     * Webhook Xendit Payment Session:
      *
-     * ORDERNUMBER-timestamp
-     *
-     * metadata.order_number lebih aman
-     * kalau tersedia.
+     * data.payment_session_id
+     * data.reference_id
+     * data.payment_id
      */
-
-    let orderNumber =
-      data?.metadata
-        ?.order_number ||
-      body?.metadata
-        ?.order_number ||
+    const paymentSessionId =
+      data?.payment_session_id ||
+      body?.payment_session_id ||
       null;
 
 
-    /*
-     * Fallback:
-     * cari berdasarkan payment_session_id.
-     */
-    const paymentSessionId =
-      data.payment_session_id ||
-      body.payment_session_id ||
+    const referenceId =
+      data?.reference_id ||
+      body?.reference_id ||
       null;
 
 
     const paymentId =
-      data.payment_id ||
-      data.payment_request_id ||
-      paymentSessionId ||
+      data?.payment_id ||
+      data?.payment_request_id ||
       null;
 
+
+    /* -----------------------------------------------------
+       TEST WEBHOOK
+       ----------------------------------------------------- */
+
+    /*
+     * Tombol "Tes dan simpan" Xendit
+     * bisa mengirim payload test yang
+     * tidak terhubung dengan order asli
+     * kita.
+     *
+     * Karena token webhook sudah valid,
+     * endpoint boleh mengembalikan HTTP 200
+     * agar Xendit mengetahui endpoint aktif.
+     *
+     * Tetapi event asli Payment Session
+     * tetap diproses normal jika punya
+     * payment_session_id / reference_id.
+     */
+    if (
+      !paymentSessionId &&
+      !referenceId &&
+      !paymentId
+    ) {
+
+      console.log(
+        'Xendit webhook received without transaction reference. Treating as connectivity test.'
+      );
+
+
+      return successResponse(
+        c,
+        {
+          received: true,
+          event:
+            event || 'test',
+          test_webhook: true
+        },
+        'Xendit webhook endpoint is reachable'
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       3. DATABASE
+       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -421,15 +549,19 @@ async (c) => {
     }
 
 
-    /*
-     * Kalau metadata order_number tidak
-     * dikirim webhook, cari order berdasarkan
-     * payment_session_id yang kita simpan
-     * dalam orders.payment_id.
-     */
     let orderRecord =
       null;
 
+
+    let orderNumber =
+      data?.metadata?.order_number ||
+      body?.metadata?.order_number ||
+      null;
+
+
+    /* -----------------------------------------------------
+       4. LOOKUP BY PAYMENT SESSION ID
+       ----------------------------------------------------- */
 
     if (paymentSessionId) {
 
@@ -456,66 +588,81 @@ async (c) => {
 
 
       if (foundOrder) {
+
         orderRecord =
           foundOrder;
 
         orderNumber =
-          foundOrder
-            .order_number;
+          foundOrder.order_number;
       }
     }
 
 
-    /*
-     * Fallback kedua:
-     * reference_id.
-     */
+    /* -----------------------------------------------------
+       5. LOOKUP BY REFERENCE ID
+       ----------------------------------------------------- */
+
     if (
-      !orderNumber &&
-      data.reference_id
+      !orderRecord &&
+      referenceId
     ) {
 
-      const referenceId =
-        String(
-          data.reference_id
+      const candidateOrderNumber =
+        extractPossibleOrderNumber(
+          referenceId
         );
 
 
-      /*
-       * Contoh:
-       * ORD-123-1720000000000
-       *
-       * Cari order yang payment_id-nya
-       * sama jauh lebih ideal.
-       *
-       * Jadi ini hanya fallback.
-       */
-
       console.log(
         'Xendit reference_id:',
-        referenceId
+        candidateOrderNumber
       );
+
+
+      /*
+       * Pertama coba exact match.
+       */
+      const {
+        data: exactOrder,
+        error: exactError
+      } =
+        await supabase
+          .from('orders')
+          .select('*')
+          .eq(
+            'order_number',
+            candidateOrderNumber
+          )
+          .maybeSingle();
+
+
+      if (exactError) {
+        console.error(
+          'Exact reference_id lookup failed:',
+          exactError
+        );
+      }
+
+
+      if (exactOrder) {
+
+        orderRecord =
+          exactOrder;
+
+        orderNumber =
+          exactOrder.order_number;
+      }
     }
 
 
-    if (!orderNumber) {
+    /* -----------------------------------------------------
+       6. LOOKUP BY METADATA ORDER NUMBER
+       ----------------------------------------------------- */
 
-      console.error(
-        'Unable to identify order from Xendit webhook:',
-        body
-      );
-
-
-      return errorResponse(
-        c,
-        'Order could not be identified',
-        null,
-        400
-      );
-    }
-
-
-    if (!orderRecord) {
+    if (
+      !orderRecord &&
+      orderNumber
+    ) {
 
       const {
         data: foundOrder,
@@ -533,40 +680,86 @@ async (c) => {
 
       if (lookupError) {
         console.error(
-          'Order lookup error:',
+          'Order lookup by order number:',
           lookupError
         );
       }
 
 
-      orderRecord =
-        foundOrder;
-    }
-
-
-    if (!orderRecord) {
-      return errorResponse(
-        c,
-        'Order not found',
-        `Order '${orderNumber}' does not exist`,
-        404
-      );
+      if (foundOrder) {
+        orderRecord =
+          foundOrder;
+      }
     }
 
 
     /* -----------------------------------------------------
-       3. IDEMPOTENCY
+       TEST / UNKNOWN ORDER
+       ----------------------------------------------------- */
+
+    if (!orderRecord) {
+
+      /*
+       * Xendit dashboard Test & Save bisa
+       * menggunakan dummy reference.
+       *
+       * Kita sudah memverifikasi
+       * x-callback-token, jadi cukup
+       * acknowledge 200 dan jangan
+       * menyentuh database.
+       */
+      console.warn(
+        'Authenticated Xendit webhook does not match a real order:',
+        {
+          event,
+          paymentSessionId,
+          referenceId
+        }
+      );
+
+
+      return successResponse(
+        c,
+        {
+          received: true,
+          event:
+            event || 'unknown',
+
+          payment_session_id:
+            paymentSessionId,
+
+          reference_id:
+            referenceId,
+
+          matched_order:
+            false
+        },
+        'Xendit webhook received'
+      );
+    }
+
+
+    orderNumber =
+      orderRecord.order_number;
+
+
+    /* -----------------------------------------------------
+       7. TRANSACTION ID
        ----------------------------------------------------- */
 
     const transactionId =
       paymentId ||
       paymentSessionId ||
-      `${event}-${orderNumber}`;
+      `${event}:${orderNumber}`;
 
 
     const idempotencyKey =
       `${transactionId}:${event}`;
 
+
+    /* -----------------------------------------------------
+       8. RUNTIME IDEMPOTENCY
+       ----------------------------------------------------- */
 
     if (
       processedCallbackMap.has(
@@ -594,7 +787,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       4. DATABASE IDEMPOTENCY
+       9. DATABASE IDEMPOTENCY
        ----------------------------------------------------- */
 
     const {
@@ -653,7 +846,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       5. MAP XENDIT EVENT
+       10. MAP EVENT -> ORDER STATUS
        ----------------------------------------------------- */
 
     let newOrderStatus =
@@ -665,6 +858,7 @@ async (c) => {
       event ===
       'payment_session.completed'
     ) {
+
       newOrderStatus =
         'paid';
     }
@@ -674,73 +868,95 @@ async (c) => {
       event ===
       'payment_session.expired'
     ) {
+
       newOrderStatus =
         'failed';
     }
 
 
+    /*
+     * Dukungan tambahan kalau nanti
+     * Payment webhook Xendit juga dipakai.
+     */
     else if (
-      event ===
-        'payment.succeeded' ||
-      event ===
-        'payment.capture'
+      event === 'payment.succeeded' ||
+      event === 'payment.capture'
     ) {
+
       newOrderStatus =
         'paid';
     }
 
 
     else if (
-      event ===
-        'payment.failed'
+      event === 'payment.failed'
     ) {
+
       newOrderStatus =
         'failed';
     }
 
 
     else if (
-      event ===
-        'payment.refund' ||
-      event ===
-        'refund.succeeded'
+      event === 'payment.refund' ||
+      event === 'refund.succeeded'
     ) {
+
       newOrderStatus =
         'refunded';
     }
 
 
+    else {
+
+      console.log(
+        'Unhandled Xendit event:',
+        event
+      );
+
+
+      /*
+       * Event valid tetapi tidak kita
+       * gunakan untuk mengubah status.
+       */
+      return successResponse(
+        c,
+        {
+          received: true,
+          order_number:
+            orderNumber,
+
+          event,
+
+          order_status:
+            orderRecord.status
+        },
+        'Xendit webhook received but no status change required'
+      );
+    }
+
+
     /* -----------------------------------------------------
-       PAYMENT METHOD
+       11. PAYMENT INFO
        ----------------------------------------------------- */
 
     const paymentMethod =
-      data.payment_method
-        ?.type ||
-
-      data.payment_method
-        ?.channel_code ||
-
-      data.channel_code ||
-
-      data.payment_channel ||
-
-      data.payment_method ||
-
-      null;
+      getPaymentMethod(
+        data
+      );
 
 
     const grossAmount =
       Number(
-        data.amount ||
-        body.amount ||
-        orderRecord.total_amount ||
+        data?.amount ??
+        body?.amount ??
+        orderRecord.total_amount ??
         0
       );
 
 
     /* -----------------------------------------------------
-       6. UPDATE ORDER
+       12. UPDATE ORDER STATUS
        ----------------------------------------------------- */
 
     await updateOrderStatus(
@@ -761,9 +977,10 @@ async (c) => {
     );
 
 
-    /*
-     * Update kolom Xendit tambahan
-     */
+    /* -----------------------------------------------------
+       13. UPDATE XENDIT FIELDS
+       ----------------------------------------------------- */
+
     const orderUpdate = {
       payment_provider:
         'xendit',
@@ -779,11 +996,17 @@ async (c) => {
     };
 
 
+    /*
+     * Hanya set paid_at pertama kali.
+     */
     if (
-      newOrderStatus ===
-      'paid'
+      newOrderStatus === 'paid' &&
+      !orderRecord.paid_at
     ) {
+
       orderUpdate.paid_at =
+        data?.updated ||
+        body?.created ||
         new Date().toISOString();
     }
 
@@ -811,12 +1034,21 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       7. STOCK MANAGEMENT
+       14. STOCK MANAGEMENT
        ----------------------------------------------------- */
 
+    /*
+     * orders.js lu sudah punya
+     * stock_processed / stock_restored.
+     *
+     * Jadi adjustStockForOrder tetap menjadi
+     * pengaman utama agar stok tidak diproses
+     * dua kali.
+     */
     if (
-      newOrderStatus ===
-      'paid'
+      newOrderStatus === 'paid' &&
+      orderRecord.status !== 'paid' &&
+      orderRecord.status !== 'settled'
     ) {
 
       try {
@@ -842,14 +1074,13 @@ async (c) => {
           'Stock deduction failed:',
           stockError
         );
-
       }
     }
 
 
     if (
-      newOrderStatus ===
-      'refunded'
+      newOrderStatus === 'refunded' &&
+      orderRecord.status !== 'refunded'
     ) {
 
       try {
@@ -875,13 +1106,12 @@ async (c) => {
           'Stock restoration failed:',
           stockError
         );
-
       }
     }
 
 
     /* -----------------------------------------------------
-       8. STORE PAYMENT HISTORY
+       15. STORE PAYMENT HISTORY
        ----------------------------------------------------- */
 
     const {
@@ -908,10 +1138,6 @@ async (c) => {
           transaction_status:
             event,
 
-          /*
-           * Field warisan Midtrans.
-           * Xendit tidak membutuhkan ini.
-           */
           fraud_status:
             null,
 
@@ -919,16 +1145,19 @@ async (c) => {
             'xendit',
 
           transaction_time:
-            body.created ||
-            data.created ||
+            body?.created ||
+            data?.created ||
             new Date()
               .toISOString(),
 
           settlement_time:
-            newOrderStatus ===
-              'paid'
-              ? new Date()
-                  .toISOString()
+            newOrderStatus === 'paid'
+              ? (
+                  data?.updated ||
+                  body?.created ||
+                  new Date()
+                    .toISOString()
+                )
               : null,
 
           raw_response:
@@ -937,6 +1166,7 @@ async (c) => {
 
 
     if (paymentInsertError) {
+
       console.error(
         'Payment history insert error:',
         paymentInsertError
@@ -945,7 +1175,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       9. MARK PROCESSED
+       16. MARK RUNTIME PROCESSED
        ----------------------------------------------------- */
 
     processedCallbackMap.set(
@@ -955,7 +1185,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       10. RESPONSE XENDIT
+       17. RESPONSE
        ----------------------------------------------------- */
 
     return successResponse(
@@ -969,6 +1199,9 @@ async (c) => {
 
         transaction_id:
           transactionId,
+
+        payment_session_id:
+          paymentSessionId,
 
         event,
 
@@ -990,10 +1223,9 @@ async (c) => {
     return errorResponse(
       c,
       'Failed to process Xendit webhook',
-      err.message || err,
+      err?.message || err,
       500
     );
-
   }
 };
 
@@ -1073,13 +1305,21 @@ async (c) => {
           'order_number',
           order_number
         )
-        .single();
+        .maybeSingle();
 
 
     if (orderError) {
+
       console.error(
         'Order status lookup error:',
         orderError
+      );
+
+      return errorResponse(
+        c,
+        'Failed to check order',
+        orderError.message,
+        500
       );
     }
 
@@ -1095,7 +1335,7 @@ async (c) => {
 
 
     /* -----------------------------------------------------
-       XENDIT SERVER CHECK
+       XENDIT SESSION CHECK
        ----------------------------------------------------- */
 
     let xenditSession =
@@ -1103,8 +1343,7 @@ async (c) => {
 
 
     if (
-      order.payment_provider ===
-        'xendit' &&
+      order.payment_provider === 'xendit' &&
       order.payment_id
     ) {
 
@@ -1124,7 +1363,6 @@ async (c) => {
           'Xendit session lookup failed:',
           sessionError
         );
-
       }
     }
 
@@ -1212,7 +1450,7 @@ async (c) => {
     return errorResponse(
       c,
       'Failed to check payment status',
-      err.message || err,
+      err?.message || err,
       500
     );
   }
