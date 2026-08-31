@@ -9,7 +9,6 @@ const XENDIT_API_BASE =
 const getXenditAuthHeader = (
   secretKey
 ) => {
-
   const encoded =
     btoa(
       `${secretKey}:`
@@ -25,7 +24,6 @@ const getXenditAuthHeader = (
 
 export const isXenditConfigured =
 (env) => {
-
   return Boolean(
     env?.XENDIT_SECRET_KEY
   );
@@ -38,7 +36,6 @@ export const isXenditConfigured =
 
 const sanitizeReferenceId =
 (value) => {
-
   return String(value || '')
     .replace(
       /[^a-zA-Z0-9_-]/g,
@@ -53,7 +50,6 @@ const sanitizeReferenceId =
 
 const sanitizeCustomerName =
 (value) => {
-
   const result =
     String(value || 'Customer')
       .replace(
@@ -69,6 +65,37 @@ const sanitizeCustomerName =
     0,
     50
   );
+};
+
+
+/* =========================================================
+   NORMALIZE PHONE
+   ========================================================= */
+
+const normalizePhone =
+(value) => {
+  if (!value) {
+    return null;
+  }
+
+  let phone =
+    String(value)
+      .replace(/\D/g, '');
+
+  if (
+    phone.startsWith('0')
+  ) {
+    phone =
+      `62${phone.slice(1)}`;
+  }
+
+  if (
+    !phone.startsWith('62')
+  ) {
+    return null;
+  }
+
+  return `+${phone}`;
 };
 
 
@@ -119,12 +146,8 @@ async (
 
 
   /*
-   * Reference ID kita buat sama
-   * dengan order_number.
-   *
-   * Ini penting supaya webhook
-   * gampang dicocokkan kembali
-   * ke order di Supabase.
+   * Reference ID dibuat dari
+   * order_number.
    */
   const referenceId =
     sanitizeReferenceId(
@@ -132,43 +155,61 @@ async (
     );
 
 
+  if (!referenceId) {
+    throw new Error(
+      'Invalid order reference ID'
+    );
+  }
+
+
+  /* =======================================================
+     BASE PAYLOAD
+     ======================================================= */
+
   const payload = {
-  reference_id: safeReferenceId,
-  session_type: 'PAY',
-  mode: 'PAYMENT_LINK',
+    reference_id:
+      referenceId,
 
-  amount: Number(grossAmount),
+    session_type:
+      'PAY',
 
-  currency: 'IDR',
-  country: 'ID',
+    mode:
+      'PAYMENT_LINK',
 
-  capture_method: 'AUTOMATIC_CAPTURE',
+    amount:
+      amount,
 
-  success_return_url:
-    `https://arumeya.com/?payment=success&order=${encodeURIComponent(orderNumber)}`,
+    currency:
+      'IDR',
 
-  cancel_return_url:
-    `https://arumeya.com/?payment=cancelled&order=${encodeURIComponent(orderNumber)}`,
+    country:
+      'ID',
 
-  ...(customer
-    ? {
-        customer: {
-          reference_id: `customer-${safeReferenceId}`,
-          type: 'INDIVIDUAL',
-          email: customer.email,
-          individual_detail: {
-            given_names: customer.name || 'Customer',
-          },
-        },
-      }
-    : {}),
-};
+    capture_method:
+      'AUTOMATIC_CAPTURE',
+
+    /*
+     * Setelah pembayaran berhasil:
+     *
+     * https://arumeya.com/
+     * ?payment=success
+     * &order=ARUME-xxxx
+     */
+    success_return_url:
+      `https://arumeya.com/?payment=success&order=${encodeURIComponent(orderNumber)}`,
+
+    /*
+     * Kalau pembayaran dibatalkan:
+     */
+    cancel_return_url:
+      `https://arumeya.com/?payment=cancelled&order=${encodeURIComponent(orderNumber)}`
+  };
 
 
-  /*
-   * Customer opsional.
-   * Hanya kirim kalau punya email.
-   */
+  /* =======================================================
+     CUSTOMER
+     ======================================================= */
+
   if (
     customer?.email
   ) {
@@ -196,28 +237,45 @@ async (
     };
 
 
-    if (
-      customer?.phone
-    ) {
+    /*
+     * Nomor HP opsional.
+     *
+     * 087881227088
+     * menjadi
+     * +6287881227088
+     */
+    const normalizedPhone =
+      normalizePhone(
+        customer.phone
+      );
 
+
+    if (
+      normalizedPhone
+    ) {
       payload.customer.mobile_number =
-        String(
-          customer.phone
-        ).trim();
+        normalizedPhone;
     }
   }
 
+
+  /* =======================================================
+     LOG
+     ======================================================= */
 
   console.log(
     'Create Xendit Payment Session:',
     JSON.stringify({
       ...payload,
+
       customer:
         payload.customer
           ? {
               ...payload.customer,
+
               email:
                 '[REDACTED]',
+
               mobile_number:
                 payload.customer
                   .mobile_number
@@ -228,6 +286,10 @@ async (
     })
   );
 
+
+  /* =======================================================
+     REQUEST XENDIT
+     ======================================================= */
 
   const response =
     await fetch(
@@ -243,6 +305,9 @@ async (
             ),
 
           'Content-Type':
+            'application/json',
+
+          Accept:
             'application/json'
         },
 
@@ -263,7 +328,6 @@ async (
 
 
   try {
-
     result =
       responseText
         ? JSON.parse(
@@ -272,7 +336,6 @@ async (
         : {};
 
   } catch {
-
     result = {
       raw:
         responseText
@@ -280,7 +343,13 @@ async (
   }
 
 
-  if (!response.ok) {
+  /* =======================================================
+     ERROR XENDIT
+     ======================================================= */
+
+  if (
+    !response.ok
+  ) {
 
     console.error(
       'Xendit create session failed:',
@@ -296,6 +365,10 @@ async (
   }
 
 
+  /* =======================================================
+     RESPONSE
+     ======================================================= */
+
   const sessionId =
     result.payment_session_id ||
     result.id ||
@@ -308,7 +381,9 @@ async (
     null;
 
 
-  if (!sessionId) {
+  if (
+    !sessionId
+  ) {
 
     console.error(
       'Xendit session missing payment_session_id:',
@@ -322,7 +397,9 @@ async (
   }
 
 
-  if (!redirectUrl) {
+  if (
+    !redirectUrl
+  ) {
 
     console.error(
       'Xendit session missing payment_link_url:',
@@ -382,7 +459,9 @@ async (
   }
 
 
-  if (!sessionId) {
+  if (
+    !sessionId
+  ) {
     throw new Error(
       'Payment session ID is required'
     );
@@ -418,7 +497,6 @@ async (
 
 
   try {
-
     result =
       responseText
         ? JSON.parse(
@@ -427,7 +505,6 @@ async (
         : {};
 
   } catch {
-
     result = {
       raw:
         responseText
@@ -435,7 +512,9 @@ async (
   }
 
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
 
     console.error(
       'Xendit get session failed:',
@@ -477,12 +556,6 @@ export const verifyXenditWebhook =
   }
 
 
-  /*
-   * Untuk Cloudflare Worker kita
-   * cukup cocokkan token yang
-   * dikirim Xendit dengan secret
-   * yang tersimpan di environment.
-   */
   return (
     String(callbackToken) ===
     String(expectedToken)
