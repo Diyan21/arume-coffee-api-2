@@ -23,10 +23,6 @@ import {
    RUNTIME CACHE
    ========================================================= */
 
-/*
- * Cache ini hanya pengaman tambahan.
- * Idempotency utama tetap dicek dari database.
- */
 const processedCallbackMap =
   new Map();
 
@@ -82,6 +78,34 @@ const getPaymentMethod = (
 
     return 'xendit';
   }
+};
+
+
+/* =========================================================
+   NORMALIZE AMOUNT
+   ========================================================= */
+
+const normalizeAmount =
+(value) => {
+
+  const amount =
+    Number(
+      value
+    );
+
+
+  if (
+    !Number.isFinite(
+      amount
+    ) ||
+    amount < 0
+  ) {
+
+    return null;
+  }
+
+
+  return amount;
 };
 
 
@@ -191,6 +215,44 @@ async (c) => {
 
 
     /* -----------------------------------------------------
+       VALIDATE TRUSTED ORDER TOTAL
+       ----------------------------------------------------- */
+
+    const trustedTotalAmount =
+      normalizeAmount(
+        orderRecord.total_amount
+      );
+
+
+    if (
+      trustedTotalAmount ===
+        null ||
+      trustedTotalAmount <=
+        0
+    ) {
+
+      console.error(
+        'Invalid order total:',
+        {
+          order_number:
+            order_number,
+
+          total_amount:
+            orderRecord.total_amount
+        }
+      );
+
+
+      return errorResponse(
+        c,
+        'Invalid order total',
+        'Order total amount is invalid',
+        500
+      );
+    }
+
+
+    /* -----------------------------------------------------
        ORDER ALREADY PAID
        ----------------------------------------------------- */
 
@@ -232,6 +294,9 @@ async (c) => {
         {
           order_number:
             order_number,
+
+          total_amount:
+            trustedTotalAmount,
 
           payment: {
             provider:
@@ -296,9 +361,14 @@ async (c) => {
             orderRecord
               .order_number,
 
+          /*
+           * TRUSTED TOTAL
+           *
+           * Tidak pernah menerima amount
+           * dari frontend.
+           */
           grossAmount:
-            orderRecord
-              .total_amount,
+            trustedTotalAmount,
 
           customer: {
             name:
@@ -314,12 +384,6 @@ async (c) => {
                 .customer_phone
           },
 
-          /*
-           * Config sekarang belum wajib
-           * menggunakan items.
-           * Tetap kita kirim supaya nanti
-           * mudah dikembangkan.
-           */
           items:
             orderItems || []
         }
@@ -371,10 +435,6 @@ async (c) => {
           payment_method:
             null,
 
-          /*
-           * Field Midtrans lama.
-           * Untuk Xendit dikosongkan.
-           */
           snap_token:
             null
         })
@@ -410,6 +470,9 @@ async (c) => {
       {
         order_number:
           order_number,
+
+        total_amount:
+          trustedTotalAmount,
 
         payment:
           paymentResult
@@ -532,14 +595,6 @@ async (c) => {
        3. XENDIT TEST WEBHOOK
        ----------------------------------------------------- */
 
-    /*
-     * Tombol "Tes dan simpan" di dashboard
-     * bisa mengirim dummy webhook yang tidak
-     * berkaitan dengan order Supabase.
-     *
-     * Kalau token valid tetapi tidak ada
-     * reference transaksi, cukup acknowledge.
-     */
     if (
       !paymentSessionId &&
       !referenceId &&
@@ -608,11 +663,6 @@ async (c) => {
       null;
 
 
-    /* -----------------------------------------------------
-       LOOKUP 1:
-       PAYMENT SESSION ID
-       ----------------------------------------------------- */
-
     if (paymentSessionId) {
 
       const {
@@ -650,19 +700,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       LOOKUP 2:
-       REFERENCE ID
-       ----------------------------------------------------- */
-
-    /*
-     * config/payment.js kita membuat:
-     *
-     * reference_id = order_number
-     *
-     * Jadi webhook bisa langsung lookup
-     * orders.order_number.
-     */
     if (
       !orderRecord &&
       referenceId
@@ -709,11 +746,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       LOOKUP 3:
-       METADATA ORDER NUMBER
-       ----------------------------------------------------- */
-
     if (
       !orderRecord &&
       orderNumber
@@ -754,10 +786,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       UNKNOWN / DASHBOARD TEST ORDER
-       ----------------------------------------------------- */
-
     if (!orderRecord) {
 
       console.warn(
@@ -770,12 +798,6 @@ async (c) => {
       );
 
 
-      /*
-       * Return 200.
-       *
-       * Jangan update database karena
-       * order tidak ditemukan.
-       */
       return successResponse(
         c,
         {
@@ -838,8 +860,7 @@ async (c) => {
           transaction_id:
             transactionId,
 
-          event:
-            event,
+          event,
 
           idempotent:
             true
@@ -901,8 +922,7 @@ async (c) => {
           transaction_id:
             transactionId,
 
-          event:
-            event,
+          event,
 
           idempotent:
             true
@@ -941,9 +961,6 @@ async (c) => {
     }
 
 
-    /*
-     * Tambahan untuk future Payment API
-     */
     else if (
       event ===
         'payment.succeeded' ||
@@ -988,10 +1005,6 @@ async (c) => {
       );
 
 
-      /*
-       * Event valid tetapi bukan event
-       * yang mengubah status order.
-       */
       return successResponse(
         c,
         {
@@ -1001,8 +1014,7 @@ async (c) => {
           order_number:
             orderNumber,
 
-          event:
-            event,
+          event,
 
           order_status:
             orderRecord.status
@@ -1022,14 +1034,67 @@ async (c) => {
       );
 
 
-    const grossAmount =
-      Number(
-        data?.amount ??
-        body?.amount ??
-        orderRecord
-          .total_amount ??
-        0
+    const expectedAmount =
+      normalizeAmount(
+        orderRecord.total_amount
       );
+
+
+    const webhookAmount =
+      normalizeAmount(
+        data?.amount ??
+        body?.amount
+      );
+
+
+    /*
+     * Kalau webhook membawa amount,
+     * nilainya wajib sama dengan order.
+     *
+     * Kalau webhook tertentu tidak
+     * membawa amount, kita tidak blok.
+     */
+    if (
+      newOrderStatus ===
+        'paid' &&
+      webhookAmount !==
+        null &&
+      expectedAmount !==
+        null &&
+      webhookAmount !==
+        expectedAmount
+    ) {
+
+      console.error(
+        'PAYMENT AMOUNT MISMATCH:',
+        {
+          order_number:
+            orderNumber,
+
+          expected_amount:
+            expectedAmount,
+
+          received_amount:
+            webhookAmount,
+
+          event
+        }
+      );
+
+
+      return errorResponse(
+        c,
+        'Payment amount mismatch',
+        `Expected ${expectedAmount}, received ${webhookAmount}`,
+        400
+      );
+    }
+
+
+    const grossAmount =
+      webhookAmount ??
+      expectedAmount ??
+      0;
 
 
     /* -----------------------------------------------------
@@ -1049,7 +1114,10 @@ async (c) => {
           'xendit',
 
         transaction_status:
-          event
+          event,
+
+        gross_amount:
+          grossAmount
       }
     );
 
@@ -1077,9 +1145,6 @@ async (c) => {
     };
 
 
-    /*
-     * Set paid_at hanya kalau belum ada.
-     */
     if (
       newOrderStatus ===
         'paid' &&
@@ -1120,10 +1185,6 @@ async (c) => {
        13. STOCK MANAGEMENT
        ----------------------------------------------------- */
 
-    /*
-     * Kurangi stok hanya saat pertama
-     * kali order berubah menjadi paid.
-     */
     if (
       newOrderStatus ===
         'paid' &&
@@ -1162,9 +1223,6 @@ async (c) => {
     }
 
 
-    /*
-     * Restore stok kalau order direfund.
-     */
     if (
       newOrderStatus ===
         'refunded' &&
@@ -1294,8 +1352,10 @@ async (c) => {
         payment_session_id:
           paymentSessionId,
 
-        event:
-          event,
+        event,
+
+        amount:
+          grossAmount,
 
         provider:
           'xendit'
@@ -1345,10 +1405,6 @@ async (c) => {
     } = body;
 
 
-    /* -----------------------------------------------------
-       VALIDATION
-       ----------------------------------------------------- */
-
     if (!order_number) {
 
       return errorResponse(
@@ -1359,10 +1415,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       SUPABASE
-       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -1381,10 +1433,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       GET ORDER
-       ----------------------------------------------------- */
-
     const {
       data: order,
       error: orderError
@@ -1393,7 +1441,12 @@ async (c) => {
         .from('orders')
         .select(`
           order_number,
+          subtotal_amount,
+          shipping_fee,
           total_amount,
+          delivery_type,
+          delivery_address,
+          delivery_distance_km,
           status,
           payment_provider,
           payment_id,
@@ -1440,10 +1493,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       GET XENDIT SESSION
-       ----------------------------------------------------- */
-
     let xenditSession =
       null;
 
@@ -1476,10 +1525,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       GET PAYMENT HISTORY
-       ----------------------------------------------------- */
-
     const {
       data: payments,
       error: paymentsError
@@ -1509,10 +1554,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       RESPONSE
-       ----------------------------------------------------- */
-
     return successResponse(
       c,
       {
@@ -1522,8 +1563,23 @@ async (c) => {
         order_status:
           order.status,
 
+        subtotal_amount:
+          order.subtotal_amount,
+
+        shipping_fee:
+          order.shipping_fee,
+
         total_amount:
           order.total_amount,
+
+        delivery_type:
+          order.delivery_type,
+
+        delivery_address:
+          order.delivery_address,
+
+        delivery_distance_km:
+          order.delivery_distance_km,
 
         payment_provider:
           order.payment_provider,
