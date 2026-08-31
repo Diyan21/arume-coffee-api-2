@@ -1,7 +1,11 @@
-import { getSupabaseClient } from '../config/supabase.js';
 import {
-  createSnapTransaction,
-  verifyMidtransSignature
+  getSupabaseClient
+} from '../config/supabase.js';
+
+import {
+  createXenditPaymentSession,
+  getXenditPaymentSession,
+  verifyXenditWebhook
 } from '../config/payment.js';
 
 import {
@@ -14,24 +18,37 @@ import {
   errorResponse
 } from '../utils/response.js';
 
-// Runtime cache.
-// Hanya lapisan tambahan.
-// Proteksi utama tetap berasal dari Supabase.
-const processedCallbackMap = new Map();
 
-/**
- * POST /api/payment/create
+/*
+ * Runtime cache.
  *
- * Generate / re-issue Midtrans payment
- * untuk order yang sudah ada.
+ * Ini cuma lapisan tambahan.
+ * Idempotency utama tetap database.
  */
-export const createPayment = async (c) => {
+const processedCallbackMap =
+  new Map();
+
+
+/* =========================================================
+   CREATE PAYMENT
+   POST /api/payment/create
+   ========================================================= */
+
+export const createPayment =
+async (c) => {
+
   try {
-    const body = await c.req.json().catch(() => ({}));
+
+    const body =
+      await c.req
+        .json()
+        .catch(() => ({}));
+
 
     const {
       order_number
     } = body;
+
 
     if (!order_number) {
       return errorResponse(
@@ -42,16 +59,32 @@ export const createPayment = async (c) => {
       );
     }
 
+
     const supabase =
-      getSupabaseClient(c.env);
+      getSupabaseClient(
+        c.env
+      );
 
-    let orderRecord = null;
 
-    if (supabase) {
-      const {
-        data,
-        error
-      } = await supabase
+    if (!supabase) {
+      return errorResponse(
+        c,
+        'Database is not configured',
+        null,
+        500
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       GET ORDER
+       ----------------------------------------------------- */
+
+    const {
+      data: orderRecord,
+      error: orderError
+    } =
+      await supabase
         .from('orders')
         .select('*')
         .eq(
@@ -60,15 +93,14 @@ export const createPayment = async (c) => {
         )
         .single();
 
-      if (error) {
-        console.error(
-          'Failed to find order:',
-          error
-        );
-      }
 
-      orderRecord = data;
+    if (orderError) {
+      console.error(
+        'Failed to find order:',
+        orderError
+      );
     }
+
 
     if (!orderRecord) {
       return errorResponse(
@@ -79,8 +111,11 @@ export const createPayment = async (c) => {
       );
     }
 
-    // Jangan generate pembayaran baru
-    // untuk order yang sudah lunas.
+
+    /* -----------------------------------------------------
+       ALREADY PAID
+       ----------------------------------------------------- */
+
     if (
       orderRecord.status === 'paid' ||
       orderRecord.status === 'settled'
@@ -88,44 +123,90 @@ export const createPayment = async (c) => {
       return errorResponse(
         c,
         'Order already paid',
-        `Order '${order_number}' is already paid and completed`,
+        `Order '${order_number}' is already paid`,
         400
       );
     }
 
-    // Kalau order masih punya Snap token,
-    // bisa dikembalikan lagi supaya user
-    // tidak terus membuat transaksi baru.
+
+    /*
+     * Kalau order pending dan masih punya
+     * Xendit payment URL,
+     * gunakan link existing.
+     *
+     * payment_id kita gunakan untuk
+     * menyimpan payment_session_id.
+     */
     if (
-      orderRecord.status === 'pending' &&
-      orderRecord.snap_token &&
+      orderRecord.status ===
+        'pending' &&
+
+      orderRecord.payment_provider ===
+        'xendit' &&
+
+      orderRecord.payment_id &&
+
       orderRecord.payment_url
     ) {
+
       return successResponse(
         c,
         {
           order_number,
+
           payment: {
-            token:
-              orderRecord.snap_token,
+            provider:
+              'xendit',
+
+            session_id:
+              orderRecord.payment_id,
 
             redirect_url:
+              orderRecord.payment_url,
+
+            payment_link_url:
               orderRecord.payment_url,
 
             reused:
               true
           }
         },
-        'Existing payment transaction returned'
+        'Existing Xendit payment session returned'
       );
     }
 
-    // ================================
-    // CREATE MIDTRANS SNAP
-    // ================================
+
+    /* -----------------------------------------------------
+       LOAD ORDER ITEMS
+       ----------------------------------------------------- */
+
+    const {
+      data: orderItems,
+      error: itemsError
+    } =
+      await supabase
+        .from('order_items')
+        .select('*')
+        .eq(
+          'order_id',
+          orderRecord.id
+        );
+
+
+    if (itemsError) {
+      console.error(
+        'Failed loading order items:',
+        itemsError
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       CREATE XENDIT SESSION
+       ----------------------------------------------------- */
 
     const paymentResult =
-      await createSnapTransaction(
+      await createXenditPaymentSession(
         c.env,
         {
           orderNumber:
@@ -143,486 +224,800 @@ export const createPayment = async (c) => {
 
             phone:
               orderRecord.customer_phone
-          }
+          },
+
+          items:
+            orderItems || []
         }
       );
 
-    // ================================
-    // SAVE SNAP TOKEN
-    // ================================
 
-    if (
-      supabase &&
-      paymentResult?.token
-    ) {
-      const {
-        error: updateError
-      } = await supabase
+    /* -----------------------------------------------------
+       SAVE PAYMENT SESSION
+       ----------------------------------------------------- */
+
+    const {
+      error: updateError
+    } =
+      await supabase
         .from('orders')
         .update({
-          snap_token:
-            paymentResult.token,
+          payment_provider:
+            'xendit',
+
+          payment_id:
+            paymentResult
+              .session_id,
 
           payment_url:
-            paymentResult.redirect_url
+            paymentResult
+              .redirect_url,
+
+          payment_method:
+            null,
+
+          /*
+           * Midtrans field lama.
+           *
+           * Jangan dipakai untuk Xendit.
+           */
+          snap_token:
+            null
         })
         .eq(
           'id',
           orderRecord.id
         );
 
-      if (updateError) {
-        console.error(
-          'Failed saving Snap token:',
-          updateError
-        );
-      }
+
+    if (updateError) {
+      console.error(
+        'Failed saving Xendit payment session:',
+        updateError
+      );
     }
+
 
     return successResponse(
       c,
       {
         order_number,
+
         payment:
           paymentResult
       },
-      'Payment transaction initiated successfully'
+      'Xendit payment session created successfully'
     );
+
+
   } catch (err) {
+
     console.error(
       'Create Payment Error:',
       err
     );
 
+
     return errorResponse(
       c,
       'Failed to create payment transaction',
-      err.message ||
-      err,
+      err.message || err,
       500
     );
   }
 };
 
 
-/**
- * POST /api/payment/callback
- *
- * Handle Midtrans webhook.
- *
- * Flow:
- *
- * pending
- *   -> stok tidak berubah
- *
- * settlement
- *   -> paid
- *   -> stok dipotong
- *
- * duplicate settlement
- *   -> tidak diproses ulang
- *
- * refund
- *   -> refunded
- *   -> stok dikembalikan
- */
-export const handlePaymentCallback = async (c) => {
+/* =========================================================
+   XENDIT WEBHOOK
+   POST /api/payment/callback
+   ========================================================= */
+
+export const handlePaymentCallback =
+async (c) => {
+
   try {
-    const body =
-      await c.req.json().catch(
-        () => ({})
+
+    /* -----------------------------------------------------
+       1. VERIFY CALLBACK TOKEN
+       ----------------------------------------------------- */
+
+    const callbackToken =
+      c.req.header(
+        'x-callback-token'
       );
 
-    // ================================
-    // MIDTRANS PAYLOAD
-    // ================================
 
-    const order_id =
-      body.order_id ||
-      body.order_number;
-
-    const transaction_status =
-      body.transaction_status ||
-      body.status ||
-      'settlement';
-
-    const fraud_status =
-      body.fraud_status ||
-      'accept';
-
-    const transaction_id =
-      body.transaction_id ||
-      `tx-${order_id}-${Date.now()}`;
-
-    const payment_type =
-      body.payment_type ||
-      'qris';
-
-    const gross_amount =
-      body.gross_amount ||
-      0;
-
-    if (!order_id) {
-      return errorResponse(
-        c,
-        'Missing order_id in callback payload',
-        null,
-        400
-      );
-    }
-
-    // ================================
-    // 1. VERIFY MIDTRANS SIGNATURE
-    // ================================
-
-    const isValidSignature =
-      await verifyMidtransSignature(
+    const isValid =
+      verifyXenditWebhook(
         c.env,
-        body
+        callbackToken
       );
 
-    if (!isValidSignature) {
+
+    if (!isValid) {
       return errorResponse(
         c,
-        'Invalid payment signature',
-        'Signature verification failed',
+        'Invalid Xendit webhook token',
+        'Webhook verification failed',
         403
       );
     }
 
-    // ================================
-    // 2. IDEMPOTENCY KEY
-    // ================================
 
-    const idempotencyKey =
-      `${transaction_id}:${transaction_status}`;
+    const body =
+      await c.req
+        .json()
+        .catch(() => ({}));
 
-    if (
-      processedCallbackMap.has(
-        idempotencyKey
-      )
-    ) {
-      return successResponse(
-        c,
-        {
-          order_number:
-            order_id,
 
-          transaction_id,
+    console.log(
+      'Xendit Webhook:',
+      JSON.stringify(body)
+    );
 
-          status:
-            transaction_status,
 
-          idempotent:
-            true
-        },
-        'Callback notification already processed'
-      );
-    }
+    const event =
+      body.event ||
+      'unknown';
+
+
+    const data =
+      body.data ||
+      {};
+
+
+    /* -----------------------------------------------------
+       2. ORDER REFERENCE
+       ----------------------------------------------------- */
+
+    /*
+     * Session reference_id kita buat:
+     *
+     * ORDERNUMBER-timestamp
+     *
+     * metadata.order_number lebih aman
+     * kalau tersedia.
+     */
+
+    let orderNumber =
+      data?.metadata
+        ?.order_number ||
+      body?.metadata
+        ?.order_number ||
+      null;
+
+
+    /*
+     * Fallback:
+     * cari berdasarkan payment_session_id.
+     */
+    const paymentSessionId =
+      data.payment_session_id ||
+      body.payment_session_id ||
+      null;
+
+
+    const paymentId =
+      data.payment_id ||
+      data.payment_request_id ||
+      paymentSessionId ||
+      null;
+
 
     const supabase =
       getSupabaseClient(
         c.env
       );
 
-    // ================================
-    // 3. CHECK DATABASE CALLBACK
-    // ================================
 
-    if (supabase) {
+    if (!supabase) {
+      return errorResponse(
+        c,
+        'Database is not configured',
+        null,
+        500
+      );
+    }
+
+
+    /*
+     * Kalau metadata order_number tidak
+     * dikirim webhook, cari order berdasarkan
+     * payment_session_id yang kita simpan
+     * dalam orders.payment_id.
+     */
+    let orderRecord =
+      null;
+
+
+    if (paymentSessionId) {
+
       const {
-        data: existingPayment,
-        error: paymentLookupError
-      } = await supabase
+        data: foundOrder,
+        error: lookupError
+      } =
+        await supabase
+          .from('orders')
+          .select('*')
+          .eq(
+            'payment_id',
+            paymentSessionId
+          )
+          .maybeSingle();
+
+
+      if (lookupError) {
+        console.error(
+          'Order lookup by payment session:',
+          lookupError
+        );
+      }
+
+
+      if (foundOrder) {
+        orderRecord =
+          foundOrder;
+
+        orderNumber =
+          foundOrder
+            .order_number;
+      }
+    }
+
+
+    /*
+     * Fallback kedua:
+     * reference_id.
+     */
+    if (
+      !orderNumber &&
+      data.reference_id
+    ) {
+
+      const referenceId =
+        String(
+          data.reference_id
+        );
+
+
+      /*
+       * Contoh:
+       * ORD-123-1720000000000
+       *
+       * Cari order yang payment_id-nya
+       * sama jauh lebih ideal.
+       *
+       * Jadi ini hanya fallback.
+       */
+
+      console.log(
+        'Xendit reference_id:',
+        referenceId
+      );
+    }
+
+
+    if (!orderNumber) {
+
+      console.error(
+        'Unable to identify order from Xendit webhook:',
+        body
+      );
+
+
+      return errorResponse(
+        c,
+        'Order could not be identified',
+        null,
+        400
+      );
+    }
+
+
+    if (!orderRecord) {
+
+      const {
+        data: foundOrder,
+        error: lookupError
+      } =
+        await supabase
+          .from('orders')
+          .select('*')
+          .eq(
+            'order_number',
+            orderNumber
+          )
+          .maybeSingle();
+
+
+      if (lookupError) {
+        console.error(
+          'Order lookup error:',
+          lookupError
+        );
+      }
+
+
+      orderRecord =
+        foundOrder;
+    }
+
+
+    if (!orderRecord) {
+      return errorResponse(
+        c,
+        'Order not found',
+        `Order '${orderNumber}' does not exist`,
+        404
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       3. IDEMPOTENCY
+       ----------------------------------------------------- */
+
+    const transactionId =
+      paymentId ||
+      paymentSessionId ||
+      `${event}-${orderNumber}`;
+
+
+    const idempotencyKey =
+      `${transactionId}:${event}`;
+
+
+    if (
+      processedCallbackMap.has(
+        idempotencyKey
+      )
+    ) {
+
+      return successResponse(
+        c,
+        {
+          order_number:
+            orderNumber,
+
+          transaction_id:
+            transactionId,
+
+          event,
+
+          idempotent:
+            true
+        },
+        'Webhook already processed'
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       4. DATABASE IDEMPOTENCY
+       ----------------------------------------------------- */
+
+    const {
+      data: existingPayment,
+      error: existingPaymentError
+    } =
+      await supabase
         .from('payments')
         .select(
           'id, transaction_id, transaction_status'
         )
         .eq(
           'transaction_id',
-          transaction_id
+          transactionId
         )
         .eq(
           'transaction_status',
-          transaction_status
+          event
         )
         .maybeSingle();
 
-      if (paymentLookupError) {
-        console.error(
-          'Payment lookup error:',
-          paymentLookupError
-        );
-      }
 
-      if (existingPayment) {
-        processedCallbackMap.set(
-          idempotencyKey,
-          true
-        );
-
-        return successResponse(
-          c,
-          {
-            order_number:
-              order_id,
-
-            transaction_id,
-
-            status:
-              transaction_status,
-
-            idempotent:
-              true
-          },
-          'Callback notification already recorded in database'
-        );
-      }
+    if (existingPaymentError) {
+      console.error(
+        'Payment history lookup:',
+        existingPaymentError
+      );
     }
 
-    // ================================
-    // 4. MAP MIDTRANS STATUS
-    // ================================
+
+    if (existingPayment) {
+
+      processedCallbackMap.set(
+        idempotencyKey,
+        true
+      );
+
+
+      return successResponse(
+        c,
+        {
+          order_number:
+            orderNumber,
+
+          transaction_id:
+            transactionId,
+
+          event,
+
+          idempotent:
+            true
+        },
+        'Xendit webhook already recorded'
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       5. MAP XENDIT EVENT
+       ----------------------------------------------------- */
 
     let newOrderStatus =
+      orderRecord.status ||
       'pending';
 
-    if (
-      transaction_status ===
-      'capture'
-    ) {
-      if (
-        fraud_status ===
-        'accept'
-      ) {
-        newOrderStatus =
-          'paid';
-      } else {
-        newOrderStatus =
-          'challenge';
-      }
 
-    } else if (
-      transaction_status ===
-      'settlement'
+    if (
+      event ===
+      'payment_session.completed'
     ) {
       newOrderStatus =
         'paid';
+    }
 
-    } else if (
-      transaction_status ===
-        'cancel' ||
-      transaction_status ===
-        'deny' ||
-      transaction_status ===
-        'expire'
+
+    else if (
+      event ===
+      'payment_session.expired'
     ) {
       newOrderStatus =
         'failed';
+    }
 
-    } else if (
-      transaction_status ===
-      'pending'
+
+    else if (
+      event ===
+        'payment.succeeded' ||
+      event ===
+        'payment.capture'
     ) {
       newOrderStatus =
-        'pending';
+        'paid';
+    }
 
-    } else if (
-      transaction_status ===
-      'refund'
+
+    else if (
+      event ===
+        'payment.failed'
+    ) {
+      newOrderStatus =
+        'failed';
+    }
+
+
+    else if (
+      event ===
+        'payment.refund' ||
+      event ===
+        'refund.succeeded'
     ) {
       newOrderStatus =
         'refunded';
-
-    } else if (
-      transaction_status ===
-      'partial_refund'
-    ) {
-      // Jangan otomatis balikin stock.
-      // Kita belum tahu item/qty mana
-      // yang direfund.
-      newOrderStatus =
-        'partial_refund';
     }
 
-    // ================================
-    // 5. UPDATE ORDER STATUS
-    // ================================
+
+    /* -----------------------------------------------------
+       PAYMENT METHOD
+       ----------------------------------------------------- */
+
+    const paymentMethod =
+      data.payment_method
+        ?.type ||
+
+      data.payment_method
+        ?.channel_code ||
+
+      data.channel_code ||
+
+      data.payment_channel ||
+
+      data.payment_method ||
+
+      null;
+
+
+    const grossAmount =
+      Number(
+        data.amount ||
+        body.amount ||
+        orderRecord.total_amount ||
+        0
+      );
+
+
+    /* -----------------------------------------------------
+       6. UPDATE ORDER
+       ----------------------------------------------------- */
 
     await updateOrderStatus(
       c.env,
-      order_id,
+      orderNumber,
       newOrderStatus,
       {
-        transaction_id,
-        payment_type,
-        transaction_status
+        transaction_id:
+          transactionId,
+
+        payment_type:
+          paymentMethod ||
+          'xendit',
+
+        transaction_status:
+          event
       }
     );
 
-    // ================================
-    // 6. STOCK MANAGEMENT
-    // ================================
 
-    // Pembayaran berhasil:
-    // potong stok sekali saja.
+    /*
+     * Update kolom Xendit tambahan
+     */
+    const orderUpdate = {
+      payment_provider:
+        'xendit',
+
+      payment_id:
+        paymentSessionId ||
+        orderRecord.payment_id,
+
+      payment_method:
+        paymentMethod
+          ? String(paymentMethod)
+          : orderRecord.payment_method
+    };
+
+
     if (
       newOrderStatus ===
       'paid'
     ) {
+      orderUpdate.paid_at =
+        new Date().toISOString();
+    }
+
+
+    const {
+      error: paymentUpdateError
+    } =
+      await supabase
+        .from('orders')
+        .update(
+          orderUpdate
+        )
+        .eq(
+          'id',
+          orderRecord.id
+        );
+
+
+    if (paymentUpdateError) {
+      console.error(
+        'Xendit order payment update failed:',
+        paymentUpdateError
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       7. STOCK MANAGEMENT
+       ----------------------------------------------------- */
+
+    if (
+      newOrderStatus ===
+      'paid'
+    ) {
+
       try {
+
         const stockResult =
           await adjustStockForOrder(
             c.env,
-            order_id,
+            orderNumber,
             'decrease'
           );
+
 
         console.log(
           'Stock deduction result:',
           stockResult
         );
-      } catch (stockError) {
+
+      } catch (
+        stockError
+      ) {
+
         console.error(
           'Stock deduction failed:',
           stockError
         );
 
-        /*
-         * Jangan return error webhook di sini.
-         *
-         * Midtrans bisa retry callback.
-         * Order sudah paid, jadi error stok
-         * harus dicatat untuk monitoring.
-         */
       }
     }
 
-    // Full refund:
-    // kembalikan stock sekali.
+
     if (
       newOrderStatus ===
       'refunded'
     ) {
+
       try {
+
         const stockResult =
           await adjustStockForOrder(
             c.env,
-            order_id,
+            orderNumber,
             'increase'
           );
+
 
         console.log(
           'Stock restoration result:',
           stockResult
         );
-      } catch (stockError) {
+
+      } catch (
+        stockError
+      ) {
+
         console.error(
           'Stock restoration failed:',
           stockError
         );
+
       }
     }
 
-    // ================================
-    // 7. STORE PAYMENT HISTORY
-    // ================================
 
-    if (supabase) {
-      const {
-        error: paymentInsertError
-      } = await supabase
+    /* -----------------------------------------------------
+       8. STORE PAYMENT HISTORY
+       ----------------------------------------------------- */
+
+    const {
+      error: paymentInsertError
+    } =
+      await supabase
         .from('payments')
         .insert({
+
           order_number:
-            order_id,
+            orderNumber,
 
-          transaction_id,
+          transaction_id:
+            transactionId,
 
-          payment_type,
+          payment_type:
+            paymentMethod
+              ? String(paymentMethod)
+              : 'xendit',
 
           gross_amount:
-            parseFloat(
-              gross_amount
-            ) || 0,
+            grossAmount,
 
-          transaction_status,
+          transaction_status:
+            event,
 
-          fraud_status,
+          /*
+           * Field warisan Midtrans.
+           * Xendit tidak membutuhkan ini.
+           */
+          fraud_status:
+            null,
+
+          payment_provider:
+            'xendit',
+
+          transaction_time:
+            body.created ||
+            data.created ||
+            new Date()
+              .toISOString(),
+
+          settlement_time:
+            newOrderStatus ===
+              'paid'
+              ? new Date()
+                  .toISOString()
+              : null,
 
           raw_response:
             body
         });
 
-      if (paymentInsertError) {
-        console.error(
-          'Payment history insert error:',
-          paymentInsertError
-        );
-      }
+
+    if (paymentInsertError) {
+      console.error(
+        'Payment history insert error:',
+        paymentInsertError
+      );
     }
 
-    // ================================
-    // 8. MARK CALLBACK PROCESSED
-    // ================================
+
+    /* -----------------------------------------------------
+       9. MARK PROCESSED
+       ----------------------------------------------------- */
 
     processedCallbackMap.set(
       idempotencyKey,
       true
     );
 
-    // ================================
-    // 9. RESPONSE TO MIDTRANS
-    // ================================
+
+    /* -----------------------------------------------------
+       10. RESPONSE XENDIT
+       ----------------------------------------------------- */
 
     return successResponse(
       c,
       {
         order_number:
-          order_id,
+          orderNumber,
 
         order_status:
           newOrderStatus,
 
-        transaction_status,
+        transaction_id:
+          transactionId,
 
-        transaction_id
+        event,
+
+        provider:
+          'xendit'
       },
-      'Payment notification processed successfully'
+      'Xendit webhook processed successfully'
     );
 
+
   } catch (err) {
+
     console.error(
-      'Payment Callback Error:',
+      'Xendit Callback Error:',
       err
     );
 
+
     return errorResponse(
       c,
-      'Failed to process payment callback',
-      err.message ||
-      err,
+      'Failed to process Xendit webhook',
+      err.message || err,
       500
     );
+
   }
 };
 
 
-/**
- * POST /api/payment/check
- *
- * Check local payment status
- */
-export const checkPaymentStatus = async (c) => {
+/* =========================================================
+   CHECK PAYMENT STATUS
+   POST /api/payment/check
+   ========================================================= */
+
+export const checkPaymentStatus =
+async (c) => {
+
   try {
+
     const body =
-      await c.req.json().catch(
-        () => ({})
-      );
+      await c.req
+        .json()
+        .catch(() => ({}));
+
 
     const {
       order_number
     } = body;
+
 
     if (!order_number) {
       return errorResponse(
@@ -633,21 +1028,42 @@ export const checkPaymentStatus = async (c) => {
       );
     }
 
+
     const supabase =
       getSupabaseClient(
         c.env
       );
 
-    if (supabase) {
-      const {
-        data: order,
-        error: orderError
-      } = await supabase
+
+    if (!supabase) {
+      return errorResponse(
+        c,
+        'Database is not configured',
+        null,
+        500
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       GET ORDER
+       ----------------------------------------------------- */
+
+    const {
+      data: order,
+      error: orderError
+    } =
+      await supabase
         .from('orders')
         .select(`
           order_number,
           total_amount,
           status,
+          payment_provider,
+          payment_id,
+          payment_method,
+          payment_url,
+          paid_at,
           stock_processed,
           stock_restored,
           created_at,
@@ -659,88 +1075,144 @@ export const checkPaymentStatus = async (c) => {
         )
         .single();
 
-      if (
+
+    if (orderError) {
+      console.error(
+        'Order status lookup error:',
         orderError
+      );
+    }
+
+
+    if (!order) {
+      return errorResponse(
+        c,
+        'Order not found',
+        `Order '${order_number}' does not exist`,
+        404
+      );
+    }
+
+
+    /* -----------------------------------------------------
+       XENDIT SERVER CHECK
+       ----------------------------------------------------- */
+
+    let xenditSession =
+      null;
+
+
+    if (
+      order.payment_provider ===
+        'xendit' &&
+      order.payment_id
+    ) {
+
+      try {
+
+        xenditSession =
+          await getXenditPaymentSession(
+            c.env,
+            order.payment_id
+          );
+
+      } catch (
+        sessionError
       ) {
+
         console.error(
-          'Order status lookup error:',
-          orderError
+          'Xendit session lookup failed:',
+          sessionError
         );
-      }
 
-      if (order) {
-        const {
-          data: payments,
-          error: paymentsError
-        } = await supabase
-          .from('payments')
-          .select('*')
-          .eq(
-            'order_number',
-            order_number
-          )
-          .order(
-            'created_at',
-            {
-              ascending:
-                false
-            }
-          );
-
-        if (
-          paymentsError
-        ) {
-          console.error(
-            'Payment history lookup error:',
-            paymentsError
-          );
-        }
-
-        return successResponse(
-          c,
-          {
-            order_number:
-              order.order_number,
-
-            order_status:
-              order.status,
-
-            total_amount:
-              order.total_amount,
-
-            stock_processed:
-              order.stock_processed,
-
-            stock_restored:
-              order.stock_restored,
-
-            payments:
-              payments ||
-              []
-          },
-          'Payment status checked successfully'
-        );
       }
     }
 
-    return errorResponse(
+
+    /* -----------------------------------------------------
+       PAYMENT HISTORY
+       ----------------------------------------------------- */
+
+    const {
+      data: payments,
+      error: paymentsError
+    } =
+      await supabase
+        .from('payments')
+        .select('*')
+        .eq(
+          'order_number',
+          order_number
+        )
+        .order(
+          'created_at',
+          {
+            ascending:
+              false
+          }
+        );
+
+
+    if (paymentsError) {
+      console.error(
+        'Payment history lookup error:',
+        paymentsError
+      );
+    }
+
+
+    return successResponse(
       c,
-      'Order not found',
-      `Order '${order_number}' does not exist`,
-      404
+      {
+        order_number:
+          order.order_number,
+
+        order_status:
+          order.status,
+
+        total_amount:
+          order.total_amount,
+
+        payment_provider:
+          order.payment_provider,
+
+        payment_method:
+          order.payment_method,
+
+        payment_url:
+          order.payment_url,
+
+        paid_at:
+          order.paid_at,
+
+        stock_processed:
+          order.stock_processed,
+
+        stock_restored:
+          order.stock_restored,
+
+        xendit_session:
+          xenditSession,
+
+        payments:
+          payments || []
+      },
+      'Payment status checked successfully'
     );
 
+
   } catch (err) {
+
     console.error(
       'Check Payment Status Error:',
       err
     );
 
+
     return errorResponse(
       c,
       'Failed to check payment status',
-      err.message ||
-      err,
+      err.message || err,
       500
     );
   }
