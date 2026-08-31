@@ -1,118 +1,227 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 
-import { successResponse, errorResponse } from './utils/response.js';
-import { getProducts, getProductById } from './controllers/products.js';
-import { createOrder, getOrderByNumber } from './controllers/orders.js';
+import {
+  successResponse,
+  errorResponse
+} from './utils/response.js';
+
+import {
+  getProducts,
+  getProductById
+} from './controllers/products.js';
+
+import {
+  createOrder,
+  getOrderByNumber
+} from './controllers/orders.js';
+
 import {
   createPayment,
   handlePaymentCallback,
   checkPaymentStatus
 } from './controllers/payment.js';
 
+
 const app = new Hono();
+
 
 /* =========================================================
    1. CORS
    ========================================================= */
 
-app.use('*', cors({
-  origin: (origin) => {
-    // Request server-to-server / tanpa Origin
-    if (!origin) return '*';
+app.use(
+  '*',
+  cors({
+    origin: (origin) => {
 
-    const allowedOrigins = [
-      // Production
-      'https://arumeya.com',
-      'https://www.arumeya.com',
+      /*
+       * Server-to-server request
+       * seperti webhook Xendit biasanya
+       * tidak membawa Origin.
+       */
+      if (!origin) {
+        return '*';
+      }
 
-      // Netlify
-      'https://arumeproject2.netlify.app',
-      'https://arume-coffee.netlify.app',
 
-      // Local development
-      'http://localhost:5173',
-      'http://localhost:3000',
-      'http://127.0.0.1:5173'
-    ];
+      const allowedOrigins = [
+        /*
+         * Production
+         */
+        'https://arumeya.com',
+        'https://www.arumeya.com',
 
-    if (
-      allowedOrigins.includes(origin) ||
-      origin.endsWith('.netlify.app') ||
-      origin.includes('localhost') ||
-      origin.includes('127.0.0.1')
-    ) {
-      return origin;
-    }
+        /*
+         * Netlify fallback / preview
+         */
+        'https://arumeproject2.netlify.app',
+        'https://arume-coffee.netlify.app',
 
-    // Origin yang tidak diizinkan
-    return null;
-  },
+        /*
+         * Local development
+         */
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://127.0.0.1:5173'
+      ];
 
-  allowMethods: [
-    'GET',
-    'POST',
-    'PUT',
-    'DELETE',
-    'OPTIONS'
-  ],
 
-  allowHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'Accept'
-  ],
+      if (
+        allowedOrigins.includes(
+          origin
+        ) ||
 
-  exposeHeaders: [
-    'Content-Length'
-  ],
+        origin.endsWith(
+          '.netlify.app'
+        ) ||
 
-  maxAge: 86400,
-  credentials: true
-}));
+        origin.includes(
+          'localhost'
+        ) ||
 
-// Universal OPTIONS / preflight
-app.options('*', (c) => c.text('', 204));
+        origin.includes(
+          '127.0.0.1'
+        )
+      ) {
+        return origin;
+      }
+
+
+      return null;
+    },
+
+
+    allowMethods: [
+      'GET',
+      'POST',
+      'PUT',
+      'DELETE',
+      'OPTIONS'
+    ],
+
+
+    allowHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Requested-With',
+      'Accept',
+
+      /*
+       * Tidak wajib untuk webhook masuk,
+       * tapi aman bila nanti dibutuhkan.
+       */
+      'X-CALLBACK-TOKEN'
+    ],
+
+
+    exposeHeaders: [
+      'Content-Length'
+    ],
+
+
+    maxAge:
+      86400,
+
+
+    credentials:
+      true
+  })
+);
+
+
+/* =========================================================
+   UNIVERSAL OPTIONS
+   ========================================================= */
+
+app.options(
+  '*',
+  (c) => {
+
+    return c.text(
+      '',
+      204
+    );
+  }
+);
 
 
 /* =========================================================
    2. HEALTH CHECK
    ========================================================= */
 
-app.get('/api/health', (c) => {
+app.get(
+  '/api/health',
+  (c) => {
 
-  const isXenditConfigured = Boolean(
-    c.env?.XENDIT_SECRET_KEY &&
-    c.env.XENDIT_SECRET_KEY.trim().length > 0
-  );
+    const isXenditConfigured =
+      Boolean(
+        c.env?.XENDIT_SECRET_KEY &&
+        c.env.XENDIT_SECRET_KEY
+          .trim()
+          .length > 0
+      );
 
-  const isSupabaseConfigured = Boolean(
-    c.env?.SUPABASE_URL &&
-    c.env?.SUPABASE_SERVICE_ROLE_KEY
-  );
 
-  return successResponse(
-    c,
-    {
-      status: 'ok',
-      service: 'Arume Coffee API',
-      runtime: 'Cloudflare Workers',
-      timestamp: new Date().toISOString(),
+    const isXenditWebhookConfigured =
+      Boolean(
+        c.env?.XENDIT_WEBHOOK_TOKEN &&
+        c.env.XENDIT_WEBHOOK_TOKEN
+          .trim()
+          .length > 0
+      );
 
-      xendit_configured: isXenditConfigured,
-      supabase_configured: isSupabaseConfigured
-    },
-    'Arume Coffee API is running and healthy'
-  );
-});
+
+    const isSupabaseConfigured =
+      Boolean(
+        c.env?.SUPABASE_URL &&
+        c.env?.SUPABASE_SERVICE_ROLE_KEY
+      );
+
+
+    return successResponse(
+      c,
+      {
+        status:
+          'ok',
+
+        service:
+          'Arume Coffee API',
+
+        runtime:
+          'Cloudflare Workers',
+
+        timestamp:
+          new Date()
+            .toISOString(),
+
+        payment_gateway:
+          'Xendit',
+
+        xendit_configured:
+          isXenditConfigured,
+
+        xendit_webhook_configured:
+          isXenditWebhookConfigured,
+
+        supabase_configured:
+          isSupabaseConfigured
+      },
+      'Arume Coffee API is running and healthy'
+    );
+  }
+);
 
 
 /* =========================================================
    3. PRODUCT ROUTES
    ========================================================= */
 
-app.get('/api/products', getProducts);
+app.get(
+  '/api/products',
+  getProducts
+);
+
 
 app.get(
   '/api/products/:id',
@@ -129,6 +238,7 @@ app.post(
   createOrder
 );
 
+
 app.get(
   '/api/orders/:orderNumber',
   getOrderByNumber
@@ -139,19 +249,33 @@ app.get(
    5. PAYMENT ROUTES
    ========================================================= */
 
-// Membuat transaksi pembayaran
+
+/*
+ * Membuat Xendit Payment Session
+ */
 app.post(
   '/api/payment/create',
   createPayment
 );
 
-// Webhook / callback pembayaran
+
+/*
+ * Webhook Xendit.
+ *
+ * Payment Session Completed
+ * Payment Session Expired
+ *
+ * Keduanya diarahkan ke endpoint ini.
+ */
 app.post(
   '/api/payment/callback',
   handlePaymentCallback
 );
 
-// Cek status pembayaran
+
+/*
+ * Cek status payment/order
+ */
 app.post(
   '/api/payment/check',
   checkPaymentStatus
@@ -162,61 +286,103 @@ app.post(
    6. ROOT / CONTROL CENTER
    ========================================================= */
 
-app.get('/', (c) => {
+app.get(
+  '/',
+  (c) => {
 
-  const acceptHeader =
-    c.req.header('accept') || '';
-
-  /*
-   * Kalau request meminta JSON,
-   * kembalikan informasi API.
-   */
-  if (
-    acceptHeader.includes('application/json') &&
-    !acceptHeader.includes('text/html')
-  ) {
-    return c.json({
-      service: 'Arume Coffee API',
-      runtime: 'Cloudflare Workers',
-      framework: 'Hono',
-      version: '1.0.0',
-      payment_gateway: 'Xendit',
-      documentation: '/api/health'
-    });
-  }
+    const acceptHeader =
+      c.req.header(
+        'accept'
+      ) || '';
 
 
-  /* ---------------------------------------------------------
-     Environment status
-     --------------------------------------------------------- */
+    /*
+     * Kalau request meminta JSON,
+     * return informasi API.
+     */
+    if (
+      acceptHeader.includes(
+        'application/json'
+      ) &&
 
-  const isXenditConfigured = Boolean(
-    c.env?.XENDIT_SECRET_KEY &&
-    c.env.XENDIT_SECRET_KEY.trim().length > 0
-  );
+      !acceptHeader.includes(
+        'text/html'
+      )
+    ) {
 
-  const isSupabaseConfigured = Boolean(
-    c.env?.SUPABASE_URL &&
-    c.env?.SUPABASE_SERVICE_ROLE_KEY
-  );
+      return c.json({
+        service:
+          'Arume Coffee API',
 
-  const frontendUrl =
-    c.env?.FRONTEND_URL ||
-    'https://arumeya.com';
+        runtime:
+          'Cloudflare Workers',
+
+        framework:
+          'Hono',
+
+        version:
+          '1.1.0',
+
+        payment_gateway:
+          'Xendit',
+
+        documentation:
+          '/api/health'
+      });
+    }
 
 
-  /* ---------------------------------------------------------
-     Control Center HTML
-     --------------------------------------------------------- */
+    /* -----------------------------------------------------
+       ENVIRONMENT STATUS
+       ----------------------------------------------------- */
 
-  const htmlContent = `
+    const isXenditConfigured =
+      Boolean(
+        c.env?.XENDIT_SECRET_KEY &&
+        c.env.XENDIT_SECRET_KEY
+          .trim()
+          .length > 0
+      );
+
+
+    const isXenditWebhookConfigured =
+      Boolean(
+        c.env?.XENDIT_WEBHOOK_TOKEN &&
+        c.env.XENDIT_WEBHOOK_TOKEN
+          .trim()
+          .length > 0
+      );
+
+
+    const isSupabaseConfigured =
+      Boolean(
+        c.env?.SUPABASE_URL &&
+        c.env?.SUPABASE_SERVICE_ROLE_KEY
+      );
+
+
+    const frontendUrl =
+      c.env?.FRONTEND_URL ||
+      'https://arumeya.com';
+
+
+    /* -----------------------------------------------------
+       CONTROL CENTER HTML
+       ----------------------------------------------------- */
+
+    const htmlContent = `
 <!doctype html>
 
-<html lang="en" class="h-full">
+<html
+  lang="en"
+  class="h-full"
+>
 
 <head>
 
-  <meta charset="UTF-8" />
+  <meta
+    charset="UTF-8"
+  />
 
   <meta
     name="viewport"
@@ -227,7 +393,9 @@ app.get('/', (c) => {
     Arume Coffee API — Control Center
   </title>
 
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"
+  ></script>
 
 </head>
 
@@ -381,7 +549,9 @@ app.get('/', (c) => {
 
     <!-- MAIN -->
 
-    <main class="p-6">
+    <main
+      class="p-6"
+    >
 
       <h2
         class="
@@ -419,10 +589,22 @@ app.get('/', (c) => {
 
 
         <p>
-          Xendit:
+          Xendit API:
           <strong>
             ${
               isXenditConfigured
+                ? 'Configured'
+                : 'Not Configured'
+            }
+          </strong>
+        </p>
+
+
+        <p>
+          Xendit Webhook:
+          <strong>
+            ${
+              isXenditWebhookConfigured
                 ? 'Configured'
                 : 'Not Configured'
             }
@@ -491,49 +673,55 @@ app.get('/', (c) => {
 </body>
 
 </html>
-  `;
+    `;
 
 
-  return c.html(htmlContent);
-});
+    return c.html(
+      htmlContent
+    );
+  }
+);
 
 
 /* =========================================================
    7. 404 HANDLER
    ========================================================= */
 
-app.notFound((c) => {
+app.notFound(
+  (c) => {
 
-  return errorResponse(
-    c,
-    'Endpoint not found',
-    `Path '${c.req.path}' was not found on this server`,
-    404
-  );
-
-});
+    return errorResponse(
+      c,
+      'Endpoint not found',
+      `Path '${c.req.path}' was not found on this server`,
+      404
+    );
+  }
+);
 
 
 /* =========================================================
    8. GLOBAL ERROR HANDLER
    ========================================================= */
 
-app.onError((err, c) => {
+app.onError(
+  (err, c) => {
 
-  console.error(
-    'API Error:',
-    err
-  );
+    console.error(
+      'API Error:',
+      err
+    );
 
-  return errorResponse(
-    c,
-    'Internal Server Error',
-    err.message ||
-      'An unexpected error occurred',
-    500
-  );
 
-});
+    return errorResponse(
+      c,
+      'Internal Server Error',
+      err?.message ||
+        'An unexpected error occurred',
+      500
+    );
+  }
+);
 
 
 /* =========================================================
