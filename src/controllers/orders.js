@@ -1492,7 +1492,8 @@ async (c) => {
           price:
             item.price,
 
-          quantity,
+          quantity:
+            item.quantity,
 
           subtotal:
             item.subtotal
@@ -2287,7 +2288,10 @@ async (c) => {
 
       const {
         data:
-          items
+          items,
+
+        error:
+          itemsError
       } =
         await supabase
           .from(
@@ -2307,6 +2311,17 @@ async (c) => {
             'order_number',
             orderNumbers
           );
+
+
+      if (
+        itemsError
+      ) {
+
+        console.error(
+          'Admin order items load error:',
+          itemsError
+        );
+      }
 
 
       allItems =
@@ -2436,6 +2451,19 @@ async (c) => {
       ).trim();
 
 
+    if (
+      !orderNumber
+    ) {
+
+      return errorResponse(
+        c,
+        'Order number is required',
+        null,
+        400
+      );
+    }
+
+
     const body =
       await c.req
         .json()
@@ -2474,9 +2502,25 @@ async (c) => {
       );
 
 
+    if (
+      !supabase
+    ) {
+
+      return errorResponse(
+        c,
+        'Database unavailable',
+        'Supabase connection unavailable',
+        503
+      );
+    }
+
+
     const {
       data:
-        currentOrder
+        currentOrder,
+
+      error:
+        currentOrderError
     } =
       await supabase
         .from(
@@ -2492,6 +2536,19 @@ async (c) => {
           orderNumber
         )
         .maybeSingle();
+
+
+    if (
+      currentOrderError
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to load order',
+        currentOrderError.message,
+        500
+      );
+    }
 
 
     if (
@@ -2516,6 +2573,42 @@ async (c) => {
         .toLowerCase();
 
 
+    /*
+     * Kalau status sama, langsung sukses.
+     * Biar aman terhadap double click / polling.
+     */
+
+    if (
+      currentStatus ===
+      status
+    ) {
+
+      return successResponse(
+        c,
+        {
+          ...currentOrder,
+
+          status:
+            currentStatus,
+
+          status_label:
+            getOrderStatusLabel(
+              currentStatus
+            ),
+
+          idempotent:
+            true
+        },
+        'Order already has requested status'
+      );
+    }
+
+
+    /*
+     * Pending / failed tidak boleh langsung
+     * menjadi ready / completed.
+     */
+
     if (
       (
         status ===
@@ -2535,6 +2628,42 @@ async (c) => {
         c,
         'Order has not been paid',
         'Only paid orders can be marked ready or completed',
+        400
+      );
+    }
+
+
+    /*
+     * Completed order jangan diubah balik.
+     */
+
+    if (
+      currentStatus ===
+      'completed'
+    ) {
+
+      return errorResponse(
+        c,
+        'Completed order cannot be changed',
+        'Completed orders are final',
+        400
+      );
+    }
+
+
+    /*
+     * Refunded order juga final.
+     */
+
+    if (
+      currentStatus ===
+      'refunded'
+    ) {
+
+      return errorResponse(
+        c,
+        'Refunded order cannot be changed',
+        'Refunded orders are final',
         400
       );
     }
@@ -2578,6 +2707,37 @@ async (c) => {
         'Failed to update order status',
         error.message,
         500
+      );
+    }
+
+
+    if (
+      inMemoryOrdersMap.has(
+        orderNumber
+      )
+    ) {
+
+      const memoryOrder =
+        inMemoryOrdersMap.get(
+          orderNumber
+        );
+
+
+      inMemoryOrdersMap.set(
+        orderNumber,
+        {
+          ...memoryOrder,
+
+          status,
+
+          status_label:
+            getOrderStatusLabel(
+              status
+            ),
+
+          updated_at:
+            now
+        }
       );
     }
 
@@ -2738,6 +2898,11 @@ async (c) => {
         .toLowerCase();
 
 
+    /*
+     * Hanya order belum bayar / gagal
+     * yang boleh dihapus.
+     */
+
     if (
       currentStatus !==
         'pending' &&
@@ -2754,6 +2919,12 @@ async (c) => {
     }
 
 
+    /*
+     * Proteksi tambahan.
+     * Walaupun status pending/failed,
+     * kalau pernah tercatat paid_at jangan hapus.
+     */
+
     if (
       order.paid_at
     ) {
@@ -2766,6 +2937,11 @@ async (c) => {
       );
     }
 
+
+    /*
+     * Kalau stok pernah berkurang,
+     * jangan izinkan hard delete.
+     */
 
     if (
       order.stock_processed ===
@@ -2781,16 +2957,41 @@ async (c) => {
     }
 
 
-    await supabase
-      .from(
-        'payments'
-      )
-      .delete()
-      .eq(
-        'order_number',
-        orderNumber
-      );
+    /*
+     * 1. Delete payment records.
+     */
 
+    const {
+      error:
+        paymentDeleteError
+    } =
+      await supabase
+        .from(
+          'payments'
+        )
+        .delete()
+        .eq(
+          'order_number',
+          orderNumber
+        );
+
+
+    if (
+      paymentDeleteError
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to delete payment records',
+        paymentDeleteError.message,
+        500
+      );
+    }
+
+
+    /*
+     * 2. Delete order items.
+     */
 
     const {
       error:
@@ -2819,6 +3020,10 @@ async (c) => {
       );
     }
 
+
+    /*
+     * 3. Delete main order.
+     */
 
     const {
       data:
@@ -2877,6 +3082,10 @@ async (c) => {
     }
 
 
+    /*
+     * Remove memory cache.
+     */
+
     inMemoryOrdersMap.delete(
       orderNumber
     );
@@ -2921,6 +3130,7 @@ async (c) => {
 
 /* =========================================================
    UPDATE ORDER STATUS
+   USED BY PAYMENT CONTROLLER
    ========================================================= */
 
 export const updateOrderStatus =
@@ -3111,6 +3321,11 @@ async (
   }
 
 
+  /*
+   * Mencegah stok berkurang dua kali
+   * kalau webhook Xendit masuk ulang.
+   */
+
   if (
     mode ===
       'decrease' &&
@@ -3129,6 +3344,11 @@ async (
     };
   }
 
+
+  /*
+   * Mencegah refund mengembalikan
+   * stok dua kali.
+   */
 
   if (
     mode ===
