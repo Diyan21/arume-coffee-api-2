@@ -2943,19 +2943,6 @@ async (c) => {
      * jangan izinkan hard delete.
      */
 
-    if (
-      order.stock_processed ===
-      true
-    ) {
-
-      return errorResponse(
-        c,
-        'Processed order cannot be deleted',
-        'Stock has already been processed for this order',
-        400
-      );
-    }
-
 
     /*
      * 1. Delete payment records.
