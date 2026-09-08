@@ -6,10 +6,23 @@
 
   "vars": {
     "SUPABASE_URL": "https://hkkjdcsgdwfxezuhvqgb.supabase.co",
-
     "WHATSAPP_BUSINESS_ACCOUNT_ID": "2106117410270483",
     "WHATSAPP_PHONE_NUMBER_ID": "1393820113809417",
     "WHATSAPP_VERIFY_TOKEN": "arume_whatsapp_webhook_2026",
     "WHATSAPP_GRAPH_API_VERSION": "v25.0"
+  },
+
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": false,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
   }
 }
