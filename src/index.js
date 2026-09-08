@@ -129,7 +129,717 @@ const ensureSupabaseEnvironment =
 
 
 /* =========================================================
-   1. CORS
+   WHATSAPP HELPERS
+   ========================================================= */
+
+const normalizeWhatsAppPhone =
+(value) => {
+
+  return String(
+    value ||
+    ''
+  )
+    .replace(
+      /[^0-9]/g,
+      ''
+    )
+    .trim();
+};
+
+
+const getWhatsAppGraphVersion =
+(env) => {
+
+  return String(
+    env?.WHATSAPP_GRAPH_API_VERSION ||
+    ''
+  )
+    .trim();
+};
+
+
+const ensureWhatsAppSendEnvironment =
+(c) => {
+
+  if (
+    !c.env?.WHATSAPP_ACCESS_TOKEN
+  ) {
+
+    return errorResponse(
+      c,
+      'WhatsApp configuration missing',
+      'WHATSAPP_ACCESS_TOKEN is not configured',
+      500
+    );
+  }
+
+
+  if (
+    !c.env?.WHATSAPP_PHONE_NUMBER_ID
+  ) {
+
+    return errorResponse(
+      c,
+      'WhatsApp configuration missing',
+      'WHATSAPP_PHONE_NUMBER_ID is not configured',
+      500
+    );
+  }
+
+
+  if (
+    !c.env?.WHATSAPP_GRAPH_API_VERSION
+  ) {
+
+    return errorResponse(
+      c,
+      'WhatsApp configuration missing',
+      'WHATSAPP_GRAPH_API_VERSION is not configured',
+      500
+    );
+  }
+
+
+  return null;
+};
+
+
+const getIncomingMessageText =
+(message) => {
+
+  if (
+    message?.type ===
+    'text'
+  ) {
+
+    return message?.text?.body ||
+      '';
+  }
+
+
+  if (
+    message?.type ===
+    'button'
+  ) {
+
+    return message?.button?.text ||
+      '[Button]';
+  }
+
+
+  if (
+    message?.type ===
+    'interactive'
+  ) {
+
+    return (
+      message?.interactive?.button_reply?.title ||
+      message?.interactive?.list_reply?.title ||
+      '[Interactive]'
+    );
+  }
+
+
+  if (
+    message?.type ===
+    'image'
+  ) {
+
+    return '[Image]';
+  }
+
+
+  if (
+    message?.type ===
+    'video'
+  ) {
+
+    return '[Video]';
+  }
+
+
+  if (
+    message?.type ===
+    'audio'
+  ) {
+
+    return '[Audio]';
+  }
+
+
+  if (
+    message?.type ===
+    'document'
+  ) {
+
+    return '[Document]';
+  }
+
+
+  if (
+    message?.type ===
+    'sticker'
+  ) {
+
+    return '[Sticker]';
+  }
+
+
+  if (
+    message?.type ===
+    'location'
+  ) {
+
+    return '[Location]';
+  }
+
+
+  if (
+    message?.type ===
+    'contacts'
+  ) {
+
+    return '[Contact]';
+  }
+
+
+  return `[${message?.type || 'Message'}]`;
+};
+
+
+/* =========================================================
+   GET WHATSAPP CONVERSATION BY PHONE
+   ========================================================= */
+
+const getWhatsAppConversationByPhone =
+async (
+  env,
+  phoneNumber
+) => {
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_conversations?phone_number=eq.${encodeURIComponent(
+        phoneNumber
+      )}&select=*&limit=1`,
+      {
+
+        method:
+          'GET',
+
+        headers:
+          getSupabaseHeaders(
+            env
+          )
+
+      }
+    );
+
+
+  const data =
+    await response.json();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      data?.message ||
+      'Failed to load WhatsApp conversation'
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      data
+    ) &&
+    data.length >
+    0
+  ) {
+
+    return data[0];
+  }
+
+
+  return null;
+};
+
+
+/* =========================================================
+   CREATE WHATSAPP CONVERSATION
+   ========================================================= */
+
+const createWhatsAppConversation =
+async (
+  env,
+  {
+    phoneNumber,
+    customerName = null
+  }
+) => {
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_conversations`,
+      {
+
+        method:
+          'POST',
+
+        headers: {
+
+          ...getSupabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            'return=representation'
+
+        },
+
+        body:
+          JSON.stringify({
+
+            phone_number:
+              phoneNumber,
+
+            customer_name:
+              customerName,
+
+            last_message:
+              null,
+
+            last_message_at:
+              null,
+
+            unread_count:
+              0
+
+          })
+
+      }
+    );
+
+
+  const data =
+    await response.json();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      data?.message ||
+      'Failed to create WhatsApp conversation'
+    );
+  }
+
+
+  return Array.isArray(
+    data
+  )
+    ? data[0]
+    : null;
+};
+
+
+/* =========================================================
+   GET OR CREATE CONVERSATION
+   ========================================================= */
+
+const getOrCreateWhatsAppConversation =
+async (
+  env,
+  {
+    phoneNumber,
+    customerName = null
+  }
+) => {
+
+  const existing =
+    await getWhatsAppConversationByPhone(
+      env,
+      phoneNumber
+    );
+
+
+  if (
+    existing
+  ) {
+
+    return existing;
+  }
+
+
+  return createWhatsAppConversation(
+    env,
+    {
+      phoneNumber,
+      customerName
+    }
+  );
+};
+
+
+/* =========================================================
+   SAVE WHATSAPP MESSAGE
+   ========================================================= */
+
+const saveWhatsAppMessage =
+async (
+  env,
+  message
+) => {
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_messages?on_conflict=whatsapp_message_id`,
+      {
+
+        method:
+          'POST',
+
+        headers: {
+
+          ...getSupabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            'resolution=ignore-duplicates,return=representation'
+
+        },
+
+        body:
+          JSON.stringify(
+            message
+          )
+
+      }
+    );
+
+
+  const data =
+    await response.json();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      data?.message ||
+      'Failed to save WhatsApp message'
+    );
+  }
+
+
+  if (
+    Array.isArray(
+      data
+    )
+  ) {
+
+    return data[0] ||
+      null;
+  }
+
+
+  return null;
+};
+
+
+/* =========================================================
+   UPDATE INCOMING CONVERSATION
+   ========================================================= */
+
+const updateConversationIncoming =
+async (
+  env,
+  {
+    conversation,
+    customerName,
+    messageText,
+    messageTime
+  }
+) => {
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_conversations?id=eq.${encodeURIComponent(
+        conversation.id
+      )}`,
+      {
+
+        method:
+          'PATCH',
+
+        headers: {
+
+          ...getSupabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            'return=representation'
+
+        },
+
+        body:
+          JSON.stringify({
+
+            customer_name:
+              customerName ||
+              conversation.customer_name ||
+              null,
+
+            last_message:
+              messageText,
+
+            last_message_at:
+              messageTime,
+
+            unread_count:
+              Number(
+                conversation.unread_count ||
+                0
+              ) +
+              1
+
+          })
+
+      }
+    );
+
+
+  const data =
+    await response.json();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      data?.message ||
+      'Failed to update conversation'
+    );
+  }
+
+
+  return Array.isArray(
+    data
+  )
+    ? data[0]
+    : null;
+};
+
+
+/* =========================================================
+   UPDATE OUTGOING CONVERSATION
+   ========================================================= */
+
+const updateConversationOutgoing =
+async (
+  env,
+  {
+    conversation,
+    messageText,
+    messageTime
+  }
+) => {
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_conversations?id=eq.${encodeURIComponent(
+        conversation.id
+      )}`,
+      {
+
+        method:
+          'PATCH',
+
+        headers: {
+
+          ...getSupabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            'return=representation'
+
+        },
+
+        body:
+          JSON.stringify({
+
+            last_message:
+              messageText,
+
+            last_message_at:
+              messageTime
+
+          })
+
+      }
+    );
+
+
+  const data =
+    await response.json();
+
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      data?.message ||
+      'Failed to update conversation'
+    );
+  }
+
+
+  return Array.isArray(
+    data
+  )
+    ? data[0]
+    : null;
+};
+
+
+/* =========================================================
+   UPDATE MESSAGE STATUS
+   ========================================================= */
+
+const updateWhatsAppMessageStatus =
+async (
+  env,
+  {
+    whatsappMessageId,
+    status
+  }
+) => {
+
+  if (
+    !whatsappMessageId
+  ) {
+
+    return;
+  }
+
+
+  const allowedStatus = [
+    'received',
+    'sent',
+    'delivered',
+    'read',
+    'failed'
+  ];
+
+
+  if (
+    !allowedStatus.includes(
+      status
+    )
+  ) {
+
+    return;
+  }
+
+
+  const supabaseUrl =
+    env.SUPABASE_URL.replace(
+      /\/$/,
+      ''
+    );
+
+
+  const response =
+    await fetch(
+      `${supabaseUrl}/rest/v1/whatsapp_messages?whatsapp_message_id=eq.${encodeURIComponent(
+        whatsappMessageId
+      )}`,
+      {
+
+        method:
+          'PATCH',
+
+        headers: {
+
+          ...getSupabaseHeaders(
+            env
+          ),
+
+          Prefer:
+            'return=minimal'
+
+        },
+
+        body:
+          JSON.stringify({
+            status
+          })
+
+      }
+    );
+
+
+  if (
+    !response.ok
+  ) {
+
+    const data =
+      await response.text();
+
+    console.error(
+      'Update WhatsApp status error:',
+      data
+    );
+  }
+};
+
+
+/* =========================================================
+   CORS
    ========================================================= */
 
 app.use(
@@ -138,11 +848,6 @@ app.use(
 
     origin:
       (origin) => {
-
-        /*
-         * Webhook / server-to-server
-         * biasanya tidak membawa Origin.
-         */
 
         if (
           !origin
@@ -155,13 +860,17 @@ app.use(
         const allowedOrigins = [
 
           'https://arumeya.com',
+
           'https://www.arumeya.com',
 
           'https://arumeproject2.netlify.app',
+
           'https://arume-coffee.netlify.app',
 
           'http://localhost:5173',
+
           'http://localhost:3000',
+
           'http://127.0.0.1:5173'
 
         ];
@@ -230,7 +939,7 @@ app.use(
 
 
 /* =========================================================
-   UNIVERSAL OPTIONS
+   OPTIONS
    ========================================================= */
 
 app.options(
@@ -246,7 +955,7 @@ app.options(
 
 
 /* =========================================================
-   2. HEALTH CHECK
+   HEALTH CHECK
    ========================================================= */
 
 app.get(
@@ -255,19 +964,13 @@ app.get(
 
     const isXenditConfigured =
       Boolean(
-        c.env?.XENDIT_SECRET_KEY &&
-        c.env.XENDIT_SECRET_KEY
-          .trim()
-          .length > 0
+        c.env?.XENDIT_SECRET_KEY
       );
 
 
     const isXenditWebhookConfigured =
       Boolean(
-        c.env?.XENDIT_WEBHOOK_TOKEN &&
-        c.env.XENDIT_WEBHOOK_TOKEN
-          .trim()
-          .length > 0
+        c.env?.XENDIT_WEBHOOK_TOKEN
       );
 
 
@@ -280,10 +983,16 @@ app.get(
 
     const isAdminConfigured =
       Boolean(
-        c.env?.ADMIN_SECRET &&
-        c.env.ADMIN_SECRET
-          .trim()
-          .length > 0
+        c.env?.ADMIN_SECRET
+      );
+
+
+    const isWhatsAppConfigured =
+      Boolean(
+        c.env?.WHATSAPP_ACCESS_TOKEN &&
+        c.env?.WHATSAPP_PHONE_NUMBER_ID &&
+        c.env?.WHATSAPP_VERIFY_TOKEN &&
+        c.env?.WHATSAPP_GRAPH_API_VERSION
       );
 
 
@@ -319,6 +1028,9 @@ app.get(
         admin_configured:
           isAdminConfigured,
 
+        whatsapp_configured:
+          isWhatsAppConfigured,
+
         shipping_api:
           true,
 
@@ -328,10 +1040,11 @@ app.get(
         admin_orders_api:
           true,
 
-        delete_pending_order_api:
+        whatsapp_api:
           true
 
       },
+
       'Arume Coffee API is running and healthy'
     );
   }
@@ -339,7 +1052,7 @@ app.get(
 
 
 /* =========================================================
-   3. PRODUCT ROUTES
+   PRODUCT ROUTES
    ========================================================= */
 
 app.get(
@@ -355,7 +1068,7 @@ app.get(
 
 
 /* =========================================================
-   ADMIN PRODUCT / STOCK ROUTES
+   ADMIN PRODUCTS
    ========================================================= */
 
 app.get(
@@ -425,17 +1138,11 @@ app.get(
         !response.ok
       ) {
 
-        console.error(
-          'Admin products Supabase error:',
-          data
-        );
-
-
         return errorResponse(
           c,
           'Failed to load products',
           data?.message ||
-            'Supabase request failed',
+          'Supabase request failed',
           response.status
         );
       }
@@ -453,6 +1160,7 @@ app.get(
               : []
 
         },
+
         'Admin products loaded successfully'
       );
 
@@ -461,17 +1169,11 @@ app.get(
       err
     ) {
 
-      console.error(
-        'Admin products error:',
-        err
-      );
-
-
       return errorResponse(
         c,
         'Failed to load products',
         err?.message ||
-          'An unexpected error occurred',
+        'Unexpected error',
         500
       );
     }
@@ -480,7 +1182,7 @@ app.get(
 
 
 /* =========================================================
-   UPDATE STOCK
+   UPDATE PRODUCT STOCK
    ========================================================= */
 
 app.patch(
@@ -538,7 +1240,8 @@ app.patch(
         !Number.isInteger(
           stock
         ) ||
-        stock < 0
+        stock <
+        0
       ) {
 
         return errorResponse(
@@ -595,17 +1298,11 @@ app.patch(
         !response.ok
       ) {
 
-        console.error(
-          'Update stock Supabase error:',
-          data
-        );
-
-
         return errorResponse(
           c,
           'Failed to update stock',
           data?.message ||
-            'Supabase request failed',
+          'Supabase request failed',
           response.status
         );
       }
@@ -616,7 +1313,7 @@ app.patch(
           data
         ) ||
         data.length ===
-          0
+        0
       ) {
 
         return errorResponse(
@@ -642,17 +1339,11 @@ app.patch(
       err
     ) {
 
-      console.error(
-        'Update stock error:',
-        err
-      );
-
-
       return errorResponse(
         c,
         'Failed to update stock',
         err?.message ||
-          'An unexpected error occurred',
+        'Unexpected error',
         500
       );
     }
@@ -661,7 +1352,7 @@ app.patch(
 
 
 /* =========================================================
-   4. SHIPPING ROUTES
+   PUBLIC SHIPPING
    ========================================================= */
 
 app.get(
@@ -716,17 +1407,11 @@ app.get(
         !response.ok
       ) {
 
-        console.error(
-          'Shipping Supabase error:',
-          data
-        );
-
-
         return errorResponse(
           c,
           'Failed to load shipping rates',
           data?.message ||
-            'Supabase request failed',
+          'Supabase request failed',
           response.status
         );
       }
@@ -744,6 +1429,7 @@ app.get(
               : []
 
         },
+
         'Shipping rates loaded successfully'
       );
 
@@ -752,17 +1438,11 @@ app.get(
       err
     ) {
 
-      console.error(
-        'Shipping rates error:',
-        err
-      );
-
-
       return errorResponse(
         c,
         'Failed to load shipping rates',
         err?.message ||
-          'An unexpected error occurred',
+        'Unexpected error',
         500
       );
     }
@@ -771,7 +1451,7 @@ app.get(
 
 
 /* =========================================================
-   ADMIN SHIPPING ROUTES
+   ADMIN SHIPPING
    ========================================================= */
 
 app.get(
@@ -841,17 +1521,11 @@ app.get(
         !response.ok
       ) {
 
-        console.error(
-          'Admin shipping Supabase error:',
-          data
-        );
-
-
         return errorResponse(
           c,
           'Failed to load shipping settings',
           data?.message ||
-            'Supabase request failed',
+          'Supabase request failed',
           response.status
         );
       }
@@ -869,6 +1543,7 @@ app.get(
               : []
 
         },
+
         'Admin shipping settings loaded successfully'
       );
 
@@ -877,17 +1552,11 @@ app.get(
       err
     ) {
 
-      console.error(
-        'Admin shipping error:',
-        err
-      );
-
-
       return errorResponse(
         c,
         'Failed to load shipping settings',
         err?.message ||
-          'An unexpected error occurred',
+        'Unexpected error',
         500
       );
     }
@@ -896,7 +1565,7 @@ app.get(
 
 
 /* =========================================================
-   UPDATE SHIPPING RATE
+   UPDATE SHIPPING
    ========================================================= */
 
 app.put(
@@ -964,7 +1633,7 @@ app.put(
 
       const active =
         body?.active ===
-          undefined
+        undefined
           ? true
           : Boolean(
               body.active
@@ -975,13 +1644,14 @@ app.put(
         !Number.isFinite(
           minDistance
         ) ||
-        minDistance < 0
+        minDistance <
+        0
       ) {
 
         return errorResponse(
           c,
           'Invalid minimum distance',
-          'min_distance must be a number greater than or equal to 0',
+          'min_distance must be greater than or equal to 0',
           400
         );
       }
@@ -991,7 +1661,8 @@ app.put(
         !Number.isFinite(
           maxDistance
         ) ||
-        maxDistance <= 0
+        maxDistance <=
+        0
       ) {
 
         return errorResponse(
@@ -1021,7 +1692,8 @@ app.put(
         !Number.isInteger(
           fee
         ) ||
-        fee < 0
+        fee <
+        0
       ) {
 
         return errorResponse(
@@ -1088,17 +1760,11 @@ app.put(
         !response.ok
       ) {
 
-        console.error(
-          'Update shipping Supabase error:',
-          data
-        );
-
-
         return errorResponse(
           c,
           'Failed to update shipping rate',
           data?.message ||
-            'Supabase request failed',
+          'Supabase request failed',
           response.status
         );
       }
@@ -1109,7 +1775,7 @@ app.put(
           data
         ) ||
         data.length ===
-          0
+        0
       ) {
 
         return errorResponse(
@@ -1124,9 +1790,12 @@ app.put(
       return successResponse(
         c,
         {
+
           shipping_rate:
             data[0]
+
         },
+
         'Shipping rate updated successfully'
       );
 
@@ -1135,17 +1804,11 @@ app.put(
       err
     ) {
 
-      console.error(
-        'Update shipping error:',
-        err
-      );
-
-
       return errorResponse(
         c,
         'Failed to update shipping rate',
         err?.message ||
-          'An unexpected error occurred',
+        'Unexpected error',
         500
       );
     }
@@ -1154,13 +1817,8 @@ app.put(
 
 
 /* =========================================================
-   5. ORDER ROUTES
+   ORDER ROUTES
    ========================================================= */
-
-
-/* ---------------------------------------------------------
-   CREATE ORDER
-   --------------------------------------------------------- */
 
 app.post(
   '/api/orders',
@@ -1168,19 +1826,11 @@ app.post(
 );
 
 
-/* ---------------------------------------------------------
-   GET FULL ORDER
-   --------------------------------------------------------- */
-
 app.get(
   '/api/orders/:orderNumber',
   getOrderByNumber
 );
 
-
-/* ---------------------------------------------------------
-   PUBLIC CUSTOMER ORDER STATUS
-   --------------------------------------------------------- */
 
 app.get(
   '/api/order-status/:orderNumber',
@@ -1192,42 +1842,17 @@ app.get(
    ADMIN ORDER ROUTES
    ========================================================= */
 
-
-/* ---------------------------------------------------------
-   GET ALL ADMIN ORDERS
-   --------------------------------------------------------- */
-
 app.get(
   '/api/admin/orders',
   getAdminOrders
 );
 
 
-/* ---------------------------------------------------------
-   UPDATE ORDER STATUS
-   --------------------------------------------------------- */
-
 app.patch(
   '/api/admin/orders/:orderNumber/status',
   updateAdminOrderStatus
 );
 
-
-/* ---------------------------------------------------------
-   DELETE PENDING / FAILED ORDER
-   --------------------------------------------------------- */
-
-/*
- * DELETE
- *
- * /api/admin/orders/:orderNumber
- *
- * Header:
- *
- * X-ADMIN-SECRET: password-admin
- *
- * Hanya pending / failed yang boleh dihapus.
- */
 
 app.delete(
   '/api/admin/orders/:orderNumber',
@@ -1236,7 +1861,1160 @@ app.delete(
 
 
 /* =========================================================
-   6. PAYMENT ROUTES
+   WHATSAPP WEBHOOK VERIFY
+
+   META akan GET endpoint ini saat pertama kali webhook
+   disambungkan.
+   ========================================================= */
+
+app.get(
+  '/api/whatsapp/webhook',
+  (c) => {
+
+    const mode =
+      c.req.query(
+        'hub.mode'
+      );
+
+
+    const token =
+      c.req.query(
+        'hub.verify_token'
+      );
+
+
+    const challenge =
+      c.req.query(
+        'hub.challenge'
+      );
+
+
+    const configuredToken =
+      c.env?.WHATSAPP_VERIFY_TOKEN ||
+      '';
+
+
+    if (
+      mode ===
+      'subscribe' &&
+      configuredToken &&
+      token ===
+      configuredToken
+    ) {
+
+      return c.text(
+        challenge ||
+        '',
+        200
+      );
+    }
+
+
+    console.warn(
+      'WhatsApp webhook verification failed'
+    );
+
+
+    return c.text(
+      'Forbidden',
+      403
+    );
+  }
+);
+
+
+/* =========================================================
+   WHATSAPP WEBHOOK INCOMING
+   ========================================================= */
+
+app.post(
+  '/api/whatsapp/webhook',
+  async (c) => {
+
+    const environmentError =
+      ensureSupabaseEnvironment(
+        c
+      );
+
+
+    if (
+      environmentError
+    ) {
+
+      return environmentError;
+    }
+
+
+    try {
+
+      const payload =
+        await c.req.json();
+
+
+      /*
+       * Meta butuh response cepat.
+       * Kita proses payload satu per satu.
+       */
+
+      const entries =
+        Array.isArray(
+          payload?.entry
+        )
+          ? payload.entry
+          : [];
+
+
+      for (
+        const entry
+        of entries
+      ) {
+
+        const changes =
+          Array.isArray(
+            entry?.changes
+          )
+            ? entry.changes
+            : [];
+
+
+        for (
+          const change
+          of changes
+        ) {
+
+          const value =
+            change?.value ||
+            {};
+
+
+          /* =================================================
+             MESSAGE STATUS
+             ================================================= */
+
+          const statuses =
+            Array.isArray(
+              value?.statuses
+            )
+              ? value.statuses
+              : [];
+
+
+          for (
+            const item
+            of statuses
+          ) {
+
+            const messageId =
+              item?.id ||
+              '';
+
+
+            const status =
+              item?.status ||
+              '';
+
+
+            await updateWhatsAppMessageStatus(
+              c.env,
+              {
+
+                whatsappMessageId:
+                  messageId,
+
+                status
+
+              }
+            );
+          }
+
+
+          /* =================================================
+             INCOMING MESSAGES
+             ================================================= */
+
+          const messages =
+            Array.isArray(
+              value?.messages
+            )
+              ? value.messages
+              : [];
+
+
+          const contacts =
+            Array.isArray(
+              value?.contacts
+            )
+              ? value.contacts
+              : [];
+
+
+          for (
+            const message
+            of messages
+          ) {
+
+            const phoneNumber =
+              normalizeWhatsAppPhone(
+                message?.from
+              );
+
+
+            if (
+              !phoneNumber
+            ) {
+
+              continue;
+            }
+
+
+            const contact =
+              contacts.find(
+                (item) =>
+                  normalizeWhatsAppPhone(
+                    item?.wa_id
+                  ) ===
+                  phoneNumber
+              );
+
+
+            const customerName =
+              contact?.profile?.name ||
+              null;
+
+
+            const messageText =
+              getIncomingMessageText(
+                message
+              );
+
+
+            const timestampNumber =
+              Number(
+                message?.timestamp
+              );
+
+
+            const messageTime =
+              Number.isFinite(
+                timestampNumber
+              )
+                ? new Date(
+                    timestampNumber *
+                    1000
+                  )
+                    .toISOString()
+                : new Date()
+                    .toISOString();
+
+
+            let conversation =
+              await getOrCreateWhatsAppConversation(
+                c.env,
+                {
+
+                  phoneNumber,
+
+                  customerName
+
+                }
+              );
+
+
+            /*
+             * Insert pesan dulu.
+             *
+             * Karena whatsapp_message_id UNIQUE,
+             * webhook duplicate tidak akan bikin
+             * pesan ganda.
+             */
+
+            const savedMessage =
+              await saveWhatsAppMessage(
+                c.env,
+                {
+
+                  conversation_id:
+                    conversation.id,
+
+                  whatsapp_message_id:
+                    message?.id ||
+                    null,
+
+                  phone_number:
+                    phoneNumber,
+
+                  direction:
+                    'incoming',
+
+                  message_type:
+                    message?.type ||
+                    'text',
+
+                  message_text:
+                    messageText,
+
+                  status:
+                    'received',
+
+                  created_at:
+                    messageTime
+
+                }
+              );
+
+
+            /*
+             * Kalau duplicate webhook,
+             * savedMessage null.
+             *
+             * Jadi unread tidak bertambah dua kali.
+             */
+
+            if (
+              savedMessage
+            ) {
+
+              conversation =
+                await updateConversationIncoming(
+                  c.env,
+                  {
+
+                    conversation,
+
+                    customerName,
+
+                    messageText,
+
+                    messageTime
+
+                  }
+                );
+            }
+          }
+        }
+      }
+
+
+      /*
+       * Meta cuma butuh HTTP 200.
+       */
+
+      return c.json(
+        {
+          received:
+            true
+        },
+        200
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        'WhatsApp webhook error:',
+        err
+      );
+
+
+      /*
+       * Kalau error database,
+       * sementara kita balikin 500 supaya log kelihatan.
+       */
+
+      return errorResponse(
+        c,
+        'WhatsApp webhook failed',
+        err?.message ||
+        'Unexpected webhook error',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN WHATSAPP - CONVERSATIONS
+   ========================================================= */
+
+app.get(
+  '/api/admin/whatsapp/conversations',
+  async (c) => {
+
+    const environmentError =
+      ensureAdminEnvironment(
+        c
+      );
+
+
+    if (
+      environmentError
+    ) {
+
+      return environmentError;
+    }
+
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    try {
+
+      const supabaseUrl =
+        c.env.SUPABASE_URL.replace(
+          /\/$/,
+          ''
+        );
+
+
+      const response =
+        await fetch(
+          `${supabaseUrl}/rest/v1/whatsapp_conversations?select=*&order=last_message_at.desc.nullslast`,
+          {
+
+            method:
+              'GET',
+
+            headers:
+              getSupabaseHeaders(
+                c.env
+              )
+
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok
+      ) {
+
+        return errorResponse(
+          c,
+          'Failed to load WhatsApp conversations',
+          data?.message ||
+          'Supabase request failed',
+          response.status
+        );
+      }
+
+
+      return successResponse(
+        c,
+        {
+
+          conversations:
+            Array.isArray(
+              data
+            )
+              ? data
+              : []
+
+        },
+
+        'WhatsApp conversations loaded successfully'
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        'WhatsApp conversations error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to load WhatsApp conversations',
+        err?.message ||
+        'Unexpected error',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN WHATSAPP - MESSAGES
+   ========================================================= */
+
+app.get(
+  '/api/admin/whatsapp/conversations/:phone/messages',
+  async (c) => {
+
+    const environmentError =
+      ensureAdminEnvironment(
+        c
+      );
+
+
+    if (
+      environmentError
+    ) {
+
+      return environmentError;
+    }
+
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    try {
+
+      const phoneNumber =
+        normalizeWhatsAppPhone(
+          c.req.param(
+            'phone'
+          )
+        );
+
+
+      if (
+        !phoneNumber
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid phone number',
+          'Phone number is required',
+          400
+        );
+      }
+
+
+      const conversation =
+        await getWhatsAppConversationByPhone(
+          c.env,
+          phoneNumber
+        );
+
+
+      if (
+        !conversation
+      ) {
+
+        return successResponse(
+          c,
+          {
+
+            conversation:
+              null,
+
+            messages:
+              []
+
+          },
+
+          'No WhatsApp conversation found'
+        );
+      }
+
+
+      const supabaseUrl =
+        c.env.SUPABASE_URL.replace(
+          /\/$/,
+          ''
+        );
+
+
+      const response =
+        await fetch(
+          `${supabaseUrl}/rest/v1/whatsapp_messages?conversation_id=eq.${encodeURIComponent(
+            conversation.id
+          )}&select=*&order=created_at.asc`,
+          {
+
+            method:
+              'GET',
+
+            headers:
+              getSupabaseHeaders(
+                c.env
+              )
+
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok
+      ) {
+
+        return errorResponse(
+          c,
+          'Failed to load WhatsApp messages',
+          data?.message ||
+          'Supabase request failed',
+          response.status
+        );
+      }
+
+
+      return successResponse(
+        c,
+        {
+
+          conversation,
+
+          messages:
+            Array.isArray(
+              data
+            )
+              ? data
+              : []
+
+        },
+
+        'WhatsApp messages loaded successfully'
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        'WhatsApp messages error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to load WhatsApp messages',
+        err?.message ||
+        'Unexpected error',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN WHATSAPP - MARK READ
+   ========================================================= */
+
+app.patch(
+  '/api/admin/whatsapp/conversations/:phone/read',
+  async (c) => {
+
+    const environmentError =
+      ensureAdminEnvironment(
+        c
+      );
+
+
+    if (
+      environmentError
+    ) {
+
+      return environmentError;
+    }
+
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    try {
+
+      const phoneNumber =
+        normalizeWhatsAppPhone(
+          c.req.param(
+            'phone'
+          )
+        );
+
+
+      if (
+        !phoneNumber
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid phone number',
+          'Phone number is required',
+          400
+        );
+      }
+
+
+      const supabaseUrl =
+        c.env.SUPABASE_URL.replace(
+          /\/$/,
+          ''
+        );
+
+
+      const response =
+        await fetch(
+          `${supabaseUrl}/rest/v1/whatsapp_conversations?phone_number=eq.${encodeURIComponent(
+            phoneNumber
+          )}`,
+          {
+
+            method:
+              'PATCH',
+
+            headers: {
+
+              ...getSupabaseHeaders(
+                c.env
+              ),
+
+              Prefer:
+                'return=representation'
+
+            },
+
+            body:
+              JSON.stringify({
+
+                unread_count:
+                  0
+
+              })
+
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (
+        !response.ok
+      ) {
+
+        return errorResponse(
+          c,
+          'Failed to mark conversation as read',
+          data?.message ||
+          'Supabase request failed',
+          response.status
+        );
+      }
+
+
+      return successResponse(
+        c,
+        {
+
+          conversation:
+            Array.isArray(
+              data
+            )
+              ? data[0] ||
+                null
+              : null
+
+        },
+
+        'Conversation marked as read'
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      return errorResponse(
+        c,
+        'Failed to mark conversation as read',
+        err?.message ||
+        'Unexpected error',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
+   ADMIN WHATSAPP - SEND MESSAGE
+   ========================================================= */
+
+app.post(
+  '/api/admin/whatsapp/send',
+  async (c) => {
+
+    const adminError =
+      ensureAdminEnvironment(
+        c
+      );
+
+
+    if (
+      adminError
+    ) {
+
+      return adminError;
+    }
+
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    const whatsappError =
+      ensureWhatsAppSendEnvironment(
+        c
+      );
+
+
+    if (
+      whatsappError
+    ) {
+
+      return whatsappError;
+    }
+
+
+    try {
+
+      const body =
+        await c.req.json();
+
+
+      const phoneNumber =
+        normalizeWhatsAppPhone(
+          body?.phone_number ||
+          body?.phone
+        );
+
+
+      const messageText =
+        String(
+          body?.message_text ||
+          body?.message ||
+          ''
+        )
+          .trim();
+
+
+      if (
+        !phoneNumber
+      ) {
+
+        return errorResponse(
+          c,
+          'Phone number required',
+          'phone_number is required',
+          400
+        );
+      }
+
+
+      if (
+        !messageText
+      ) {
+
+        return errorResponse(
+          c,
+          'Message required',
+          'message_text is required',
+          400
+        );
+      }
+
+
+      if (
+        messageText.length >
+        4096
+      ) {
+
+        return errorResponse(
+          c,
+          'Message too long',
+          'message_text must be 4096 characters or fewer',
+          400
+        );
+      }
+
+
+      const graphVersion =
+        getWhatsAppGraphVersion(
+          c.env
+        );
+
+
+      const graphUrl =
+        `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(
+          c.env.WHATSAPP_PHONE_NUMBER_ID
+        )}/messages`;
+
+
+      const graphResponse =
+        await fetch(
+          graphUrl,
+          {
+
+            method:
+              'POST',
+
+            headers: {
+
+              Authorization:
+                `Bearer ${c.env.WHATSAPP_ACCESS_TOKEN}`,
+
+              'Content-Type':
+                'application/json'
+
+            },
+
+            body:
+              JSON.stringify({
+
+                messaging_product:
+                  'whatsapp',
+
+                recipient_type:
+                  'individual',
+
+                to:
+                  phoneNumber,
+
+                type:
+                  'text',
+
+                text: {
+
+                  preview_url:
+                    false,
+
+                  body:
+                    messageText
+
+                }
+
+              })
+
+          }
+        );
+
+
+      const graphData =
+        await graphResponse.json();
+
+
+      if (
+        !graphResponse.ok
+      ) {
+
+        console.error(
+          'WhatsApp Graph API error:',
+          graphData
+        );
+
+
+        return errorResponse(
+          c,
+          'Failed to send WhatsApp message',
+          graphData?.error?.message ||
+          'Meta Graph API request failed',
+          graphResponse.status
+        );
+      }
+
+
+      const whatsappMessageId =
+        graphData?.messages?.[0]?.id ||
+        null;
+
+
+      const messageTime =
+        new Date()
+          .toISOString();
+
+
+      let conversation =
+        await getOrCreateWhatsAppConversation(
+          c.env,
+          {
+
+            phoneNumber,
+
+            customerName:
+              null
+
+          }
+        );
+
+
+      const savedMessage =
+        await saveWhatsAppMessage(
+          c.env,
+          {
+
+            conversation_id:
+              conversation.id,
+
+            whatsapp_message_id:
+              whatsappMessageId,
+
+            phone_number:
+              phoneNumber,
+
+            direction:
+              'outgoing',
+
+            message_type:
+              'text',
+
+            message_text:
+              messageText,
+
+            status:
+              'sent',
+
+            created_at:
+              messageTime
+
+          }
+        );
+
+
+      conversation =
+        await updateConversationOutgoing(
+          c.env,
+          {
+
+            conversation,
+
+            messageText,
+
+            messageTime
+
+          }
+        );
+
+
+      return successResponse(
+        c,
+        {
+
+          message: {
+
+            id:
+              savedMessage?.id ||
+              null,
+
+            whatsapp_message_id:
+              whatsappMessageId,
+
+            phone_number:
+              phoneNumber,
+
+            direction:
+              'outgoing',
+
+            message_type:
+              'text',
+
+            message_text:
+              messageText,
+
+            status:
+              'sent',
+
+            created_at:
+              messageTime
+
+          },
+
+          conversation
+
+        },
+
+        'WhatsApp message sent successfully'
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        'WhatsApp send error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'Failed to send WhatsApp message',
+        err?.message ||
+        'Unexpected error',
+        500
+      );
+    }
+  }
+);
+
+
+/* =========================================================
+   PAYMENT ROUTES
    ========================================================= */
 
 app.post(
@@ -1258,7 +3036,7 @@ app.post(
 
 
 /* =========================================================
-   7. ROOT / CONTROL CENTER
+   ROOT / CONTROL CENTER
    ========================================================= */
 
 app.get(
@@ -1293,7 +3071,7 @@ app.get(
           'Hono',
 
         version:
-          '1.5.0',
+          '2.0.0',
 
         payment_gateway:
           'Xendit',
@@ -1307,8 +3085,11 @@ app.get(
         admin_orders:
           true,
 
-        delete_pending_orders:
+        whatsapp:
           true,
+
+        whatsapp_webhook:
+          '/api/whatsapp/webhook',
 
         documentation:
           '/api/health'
@@ -1317,52 +3098,24 @@ app.get(
     }
 
 
-    const isXenditConfigured =
-      Boolean(
-        c.env?.XENDIT_SECRET_KEY &&
-        c.env.XENDIT_SECRET_KEY
-          .trim()
-          .length > 0
-      );
-
-
-    const isXenditWebhookConfigured =
-      Boolean(
-        c.env?.XENDIT_WEBHOOK_TOKEN &&
-        c.env.XENDIT_WEBHOOK_TOKEN
-          .trim()
-          .length > 0
-      );
-
-
-    const isSupabaseConfigured =
-      Boolean(
-        c.env?.SUPABASE_URL &&
-        c.env?.SUPABASE_SERVICE_ROLE_KEY
-      );
-
-
-    const isAdminConfigured =
-      Boolean(
-        c.env?.ADMIN_SECRET &&
-        c.env.ADMIN_SECRET
-          .trim()
-          .length > 0
-      );
-
-
     const frontendUrl =
       c.env?.FRONTEND_URL ||
       'https://arumeya.com';
 
 
+    const whatsappConfigured =
+      Boolean(
+        c.env?.WHATSAPP_ACCESS_TOKEN &&
+        c.env?.WHATSAPP_PHONE_NUMBER_ID &&
+        c.env?.WHATSAPP_VERIFY_TOKEN &&
+        c.env?.WHATSAPP_GRAPH_API_VERSION
+      );
+
+
     const htmlContent = `
 <!doctype html>
 
-<html
-  lang="en"
-  class="h-full"
->
+<html lang="en">
 
 <head>
 
@@ -1374,250 +3127,88 @@ app.get(
   />
 
   <title>
-    Arume Coffee API — Control Center
+    Arume Coffee API
   </title>
 
-  <script
-    src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"
-  ></script>
+  <style>
+
+    body {
+      margin: 0;
+      padding: 40px 20px;
+      background: #0a0806;
+      color: #f3ece2;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      max-width: 760px;
+      margin: auto;
+    }
+
+    .card {
+      border: 1px solid #5c4a34;
+      border-radius: 18px;
+      padding: 24px;
+      background: #15110d;
+    }
+
+    h1 {
+      color: #d7ad62;
+    }
+
+    .status {
+      color: #86efac;
+    }
+
+    code {
+      color: #e7c98f;
+    }
+
+  </style>
 
 </head>
 
+<body>
 
-<body
-  class="
-    bg-[#141414]
-    text-[#141414]
-    font-sans
-    antialiased
-    min-h-screen
-    flex
-    flex-col
-    p-2
-    sm:p-4
-  "
->
+  <div class="container">
 
-  <div
-    class="
-      flex
-      flex-col
-      min-h-[calc(100vh-2rem)]
-      w-full
-      max-w-7xl
-      mx-auto
-      bg-[#E4E3E0]
-      text-[#141414]
-      border-[8px]
-      sm:border-[12px]
-      border-[#141414]
-      shadow-2xl
-      overflow-hidden
-    "
-  >
+    <div class="card">
 
+      <h1>
+        Arume Coffee API
+      </h1>
 
-    <header
-      class="
-        flex
-        flex-wrap
-        items-center
-        justify-between
-        px-4
-        sm:px-6
-        py-4
-        border-b
-        border-[#141414]
-      "
-    >
+      <p class="status">
+        ● API Online
+      </p>
 
-      <div>
+      <p>
+        Runtime:
+        Cloudflare Workers + Hono
+      </p>
 
-        <div
-          class="
-            bg-[#141414]
-            text-[#E4E3E0]
-            px-3
-            py-1
-            inline-block
-            font-mono
-            text-xs
-            font-bold
-          "
-        >
-          ARUME_API_V1
-        </div>
+      <p>
+        WhatsApp:
+        ${
+          whatsappConfigured
+            ? 'Configured'
+            : 'Not Configured'
+        }
+      </p>
 
-        <h1
-          class="
-            font-serif
-            italic
-            text-xl
-            mt-2
-          "
-        >
-          Control Center
-        </h1>
+      <p>
+        Webhook:
+        <code>
+          /api/whatsapp/webhook
+        </code>
+      </p>
 
-      </div>
+      <p>
+        Frontend:
+        ${frontendUrl}
+      </p>
 
-
-      <div
-        class="
-          flex
-          items-center
-          gap-2
-        "
-      >
-
-        <div
-          class="
-            w-2.5
-            h-2.5
-            rounded-full
-            bg-green-600
-            animate-pulse
-          "
-        ></div>
-
-        <span
-          class="
-            uppercase
-            font-bold
-            tracking-widest
-            text-xs
-          "
-        >
-          Live
-        </span>
-
-      </div>
-
-    </header>
-
-
-    <main
-      class="p-6"
-    >
-
-      <h2
-        class="
-          text-2xl
-          font-bold
-          mb-6
-        "
-      >
-        API Control Center Active
-      </h2>
-
-
-      <div
-        class="
-          font-mono
-          text-sm
-          space-y-3
-        "
-      >
-
-        <p>
-          Worker:
-          <strong>
-            arume-coffee-api-2
-          </strong>
-        </p>
-
-
-        <p>
-          Xendit API:
-          <strong>
-            ${
-              isXenditConfigured
-                ? 'Configured'
-                : 'Not Configured'
-            }
-          </strong>
-        </p>
-
-
-        <p>
-          Xendit Webhook:
-          <strong>
-            ${
-              isXenditWebhookConfigured
-                ? 'Configured'
-                : 'Not Configured'
-            }
-          </strong>
-        </p>
-
-
-        <p>
-          Supabase:
-          <strong>
-            ${
-              isSupabaseConfigured
-                ? 'Configured'
-                : 'Not Configured'
-            }
-          </strong>
-        </p>
-
-
-        <p>
-          Admin API:
-          <strong>
-            ${
-              isAdminConfigured
-                ? 'Configured'
-                : 'Not Configured'
-            }
-          </strong>
-        </p>
-
-
-        <p>
-          Shipping API:
-          <strong>
-            Enabled
-          </strong>
-        </p>
-
-
-        <p>
-          Order Status API:
-          <strong>
-            Enabled
-          </strong>
-        </p>
-
-
-        <p>
-          Admin Orders:
-          <strong>
-            Enabled
-          </strong>
-        </p>
-
-
-        <p>
-          Delete Pending Orders:
-          <strong>
-            Enabled
-          </strong>
-        </p>
-
-
-        <p>
-          Frontend:
-          <strong>
-            ${frontendUrl}
-          </strong>
-        </p>
-
-
-      </div>
-
-    </main>
+    </div>
 
   </div>
 
@@ -1635,7 +3226,7 @@ app.get(
 
 
 /* =========================================================
-   8. 404 HANDLER
+   404
    ========================================================= */
 
 app.notFound(
@@ -1652,7 +3243,7 @@ app.notFound(
 
 
 /* =========================================================
-   9. GLOBAL ERROR HANDLER
+   GLOBAL ERROR HANDLER
    ========================================================= */
 
 app.onError(
@@ -1668,7 +3259,7 @@ app.onError(
       c,
       'Internal Server Error',
       err?.message ||
-        'An unexpected error occurred',
+      'An unexpected error occurred',
       500
     );
   }
