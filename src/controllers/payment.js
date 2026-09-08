@@ -18,6 +18,10 @@ import {
   errorResponse
 } from '../utils/response.js';
 
+import {
+  sendOrderPaymentSuccessWhatsApp
+} from '../services/whatsapp.js';
+
 
 /* =========================================================
    RUNTIME CACHE
@@ -132,10 +136,6 @@ async (c) => {
     } = body;
 
 
-    /* -----------------------------------------------------
-       VALIDATION
-       ----------------------------------------------------- */
-
     if (!order_number) {
 
       return errorResponse(
@@ -146,10 +146,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       SUPABASE
-       ----------------------------------------------------- */
 
     const supabase =
       getSupabaseClient(
@@ -167,10 +163,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       GET ORDER
-       ----------------------------------------------------- */
 
     const {
       data: orderRecord,
@@ -214,10 +206,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       VALIDATE TRUSTED ORDER TOTAL
-       ----------------------------------------------------- */
-
     const trustedTotalAmount =
       normalizeAmount(
         orderRecord.total_amount
@@ -234,9 +222,7 @@ async (c) => {
       console.error(
         'Invalid order total:',
         {
-          order_number:
-            order_number,
-
+          order_number,
           total_amount:
             orderRecord.total_amount
         }
@@ -251,10 +237,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       ORDER ALREADY PAID
-       ----------------------------------------------------- */
 
     if (
       orderRecord.status ===
@@ -272,16 +254,11 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       REUSE EXISTING PAYMENT SESSION
-       ----------------------------------------------------- */
-
     if (
       orderRecord.status ===
         'pending' &&
 
-      orderRecord
-        .payment_provider ===
+      orderRecord.payment_provider ===
         'xendit' &&
 
       orderRecord.payment_id &&
@@ -292,8 +269,7 @@ async (c) => {
       return successResponse(
         c,
         {
-          order_number:
-            order_number,
+          order_number,
 
           total_amount:
             trustedTotalAmount,
@@ -303,16 +279,13 @@ async (c) => {
               'xendit',
 
             session_id:
-              orderRecord
-                .payment_id,
+              orderRecord.payment_id,
 
             redirect_url:
-              orderRecord
-                .payment_url,
+              orderRecord.payment_url,
 
             payment_link_url:
-              orderRecord
-                .payment_url,
+              orderRecord.payment_url,
 
             reused:
               true
@@ -322,10 +295,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       LOAD ORDER ITEMS
-       ----------------------------------------------------- */
 
     const {
       data: orderItems,
@@ -349,39 +318,25 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       CREATE XENDIT PAYMENT SESSION
-       ----------------------------------------------------- */
-
     const paymentResult =
       await createXenditPaymentSession(
         c.env,
         {
           orderNumber:
-            orderRecord
-              .order_number,
+            orderRecord.order_number,
 
-          /*
-           * TRUSTED TOTAL
-           *
-           * Tidak pernah menerima amount
-           * dari frontend.
-           */
           grossAmount:
             trustedTotalAmount,
 
           customer: {
             name:
-              orderRecord
-                .customer_name,
+              orderRecord.customer_name,
 
             email:
-              orderRecord
-                .customer_email,
+              orderRecord.customer_email,
 
             phone:
-              orderRecord
-                .customer_phone
+              orderRecord.customer_phone
           },
 
           items:
@@ -411,10 +366,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       SAVE PAYMENT SESSION TO ORDER
-       ----------------------------------------------------- */
-
     const {
       error: saveError
     } =
@@ -425,12 +376,10 @@ async (c) => {
             'xendit',
 
           payment_id:
-            paymentResult
-              .session_id,
+            paymentResult.session_id,
 
           payment_url:
-            paymentResult
-              .redirect_url,
+            paymentResult.redirect_url,
 
           payment_method:
             null,
@@ -461,15 +410,10 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       RESPONSE
-       ----------------------------------------------------- */
-
     return successResponse(
       c,
       {
-        order_number:
-          order_number,
+        order_number,
 
         total_amount:
           trustedTotalAmount,
@@ -509,10 +453,6 @@ async (c) => {
 
   try {
 
-    /* -----------------------------------------------------
-       1. VERIFY XENDIT TOKEN
-       ----------------------------------------------------- */
-
     const callbackToken =
       c.req.header(
         'x-callback-token'
@@ -541,10 +481,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       2. READ WEBHOOK BODY
-       ----------------------------------------------------- */
 
     const body =
       await c.req
@@ -591,10 +527,6 @@ async (c) => {
       null;
 
 
-    /* -----------------------------------------------------
-       3. XENDIT TEST WEBHOOK
-       ----------------------------------------------------- */
-
     if (
       !paymentSessionId &&
       !referenceId &&
@@ -624,10 +556,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       4. SUPABASE
-       ----------------------------------------------------- */
-
     const supabase =
       getSupabaseClient(
         c.env
@@ -644,10 +572,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       5. FIND ORDER
-       ----------------------------------------------------- */
 
     let orderRecord =
       null;
@@ -694,8 +618,7 @@ async (c) => {
           foundOrder;
 
         orderNumber =
-          foundOrder
-            .order_number;
+          foundOrder.order_number;
       }
     }
 
@@ -740,8 +663,7 @@ async (c) => {
           foundOrder;
 
         orderNumber =
-          foundOrder
-            .order_number;
+          foundOrder.order_number;
       }
     }
 
@@ -780,8 +702,7 @@ async (c) => {
           foundOrder;
 
         orderNumber =
-          foundOrder
-            .order_number;
+          foundOrder.order_number;
       }
     }
 
@@ -823,13 +744,8 @@ async (c) => {
 
 
     orderNumber =
-      orderRecord
-        .order_number;
+      orderRecord.order_number;
 
-
-    /* -----------------------------------------------------
-       6. TRANSACTION ID
-       ----------------------------------------------------- */
 
     const transactionId =
       paymentId ||
@@ -840,10 +756,6 @@ async (c) => {
     const idempotencyKey =
       `${transactionId}:${event}`;
 
-
-    /* -----------------------------------------------------
-       7. MEMORY IDEMPOTENCY
-       ----------------------------------------------------- */
 
     if (
       processedCallbackMap.has(
@@ -869,10 +781,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       8. DATABASE IDEMPOTENCY
-       ----------------------------------------------------- */
 
     const {
       data: existingPayment,
@@ -931,10 +839,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       9. MAP XENDIT EVENT
-       ----------------------------------------------------- */
 
     let newOrderStatus =
       orderRecord.status ||
@@ -1024,10 +928,6 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       10. PAYMENT INFORMATION
-       ----------------------------------------------------- */
-
     const paymentMethod =
       getPaymentMethod(
         data
@@ -1047,13 +947,6 @@ async (c) => {
       );
 
 
-    /*
-     * Kalau webhook membawa amount,
-     * nilainya wajib sama dengan order.
-     *
-     * Kalau webhook tertentu tidak
-     * membawa amount, kita tidak blok.
-     */
     if (
       newOrderStatus ===
         'paid' &&
@@ -1097,10 +990,6 @@ async (c) => {
       0;
 
 
-    /* -----------------------------------------------------
-       11. UPDATE ORDER STATUS
-       ----------------------------------------------------- */
-
     await updateOrderStatus(
       c.env,
       orderNumber,
@@ -1122,26 +1011,20 @@ async (c) => {
     );
 
 
-    /* -----------------------------------------------------
-       12. UPDATE XENDIT FIELDS
-       ----------------------------------------------------- */
-
     const orderUpdate = {
       payment_provider:
         'xendit',
 
       payment_id:
         paymentSessionId ||
-        orderRecord
-          .payment_id,
+        orderRecord.payment_id,
 
       payment_method:
         paymentMethod
           ? String(
               paymentMethod
             )
-          : orderRecord
-              .payment_method
+          : orderRecord.payment_method
     };
 
 
@@ -1180,10 +1063,6 @@ async (c) => {
       );
     }
 
-
-    /* -----------------------------------------------------
-       13. STOCK MANAGEMENT
-       ----------------------------------------------------- */
 
     if (
       newOrderStatus ===
@@ -1258,9 +1137,57 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       14. STORE PAYMENT HISTORY
-       ----------------------------------------------------- */
+    /* =====================================================
+       SEND WHATSAPP PAYMENT SUCCESS
+       ===================================================== */
+
+    if (
+      newOrderStatus ===
+        'paid' &&
+
+      orderRecord.status !==
+        'paid' &&
+
+      orderRecord.status !==
+        'settled'
+    ) {
+
+      try {
+
+        const whatsappResult =
+          await sendOrderPaymentSuccessWhatsApp(
+            c.env,
+            {
+              phoneNumber:
+                orderRecord.customer_phone,
+
+              customerName:
+                orderRecord.customer_name,
+
+              orderNumber,
+
+              total:
+                grossAmount
+            }
+          );
+
+
+        console.log(
+          'WhatsApp payment success result:',
+          whatsappResult
+        );
+
+      } catch (
+        whatsappError
+      ) {
+
+        console.error(
+          'WhatsApp payment success error:',
+          whatsappError
+        );
+      }
+    }
+
 
     const now =
       new Date()
@@ -1323,19 +1250,11 @@ async (c) => {
     }
 
 
-    /* -----------------------------------------------------
-       15. MARK PROCESSED
-       ----------------------------------------------------- */
-
     processedCallbackMap.set(
       idempotencyKey,
       true
     );
 
-
-    /* -----------------------------------------------------
-       16. WEBHOOK RESPONSE
-       ----------------------------------------------------- */
 
     return successResponse(
       c,
@@ -1498,8 +1417,7 @@ async (c) => {
 
 
     if (
-      order
-        .payment_provider ===
+      order.payment_provider ===
         'xendit' &&
 
       order.payment_id
