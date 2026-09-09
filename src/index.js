@@ -26,6 +26,10 @@ import {
   checkPaymentStatus
 } from './controllers/payment.js';
 
+import {
+  sendWelcomeEmail
+} from './controllers/auth.js';
+
 
 const app =
   new Hono();
@@ -3012,6 +3016,14 @@ app.post(
   }
 );
 
+/* =========================================================
+   AUTH
+   ========================================================= */
+
+app.post(
+  '/api/auth/welcome-email',
+  sendWelcomeEmail
+);
 
 /* =========================================================
    PAYMENT ROUTES
@@ -3223,7 +3235,6 @@ app.get(
     );
   }
 );
-
 
 /* =========================================================
    404
