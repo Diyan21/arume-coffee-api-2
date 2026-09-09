@@ -20,7 +20,7 @@ import {
 
 import {
   sendOrderPaymentSuccessWhatsApp
-} from '../services/whatsapp.js';
+} from './whatsapp.js';
 
 
 /* =========================================================
@@ -35,9 +35,8 @@ const processedCallbackMap =
    HELPERS
    ========================================================= */
 
-const normalizeEvent = (
-  event
-) => {
+const normalizeEvent =
+(event) => {
 
   return String(
     event || ''
@@ -47,9 +46,8 @@ const normalizeEvent = (
 };
 
 
-const getPaymentMethod = (
-  data = {}
-) => {
+const getPaymentMethod =
+(data = {}) => {
 
   const method =
     data?.payment_method?.type ||
@@ -60,6 +58,7 @@ const getPaymentMethod = (
 
 
   if (!method) {
+
     return null;
   }
 
@@ -68,6 +67,7 @@ const getPaymentMethod = (
     typeof method ===
     'string'
   ) {
+
     return method;
   }
 
@@ -1064,6 +1064,10 @@ async (c) => {
     }
 
 
+    /* =====================================================
+       STOCK DEDUCTION
+       ===================================================== */
+
     if (
       newOrderStatus ===
         'paid' &&
@@ -1101,6 +1105,10 @@ async (c) => {
       }
     }
 
+
+    /* =====================================================
+       STOCK RESTORATION
+       ===================================================== */
 
     if (
       newOrderStatus ===
@@ -1188,6 +1196,10 @@ async (c) => {
       }
     }
 
+
+    /* =====================================================
+       SAVE PAYMENT HISTORY
+       ===================================================== */
 
     const now =
       new Date()
