@@ -30,6 +30,10 @@ import {
   sendWelcomeEmail
 } from './controllers/auth.js';
 
+import {
+  sendOrderPaymentSuccessWhatsApp
+} from './controllers/whatsapp.js';
+
 
 const app =
   new Hono();
@@ -139,15 +143,34 @@ const ensureSupabaseEnvironment =
 const normalizeWhatsAppPhone =
 (value) => {
 
-  return String(
-    value ||
-    ''
-  )
-    .replace(
-      /[^0-9]/g,
+  let phone =
+    String(
+      value ||
       ''
     )
-    .trim();
+      .replace(
+        /[^0-9]/g,
+        ''
+      )
+      .trim();
+
+
+  /*
+   * 08xxxxxxxxxx -> 628xxxxxxxxxx
+   */
+
+  if (
+    phone.startsWith(
+      '0'
+    )
+  ) {
+
+    phone =
+      `62${phone.slice(1)}`;
+  }
+
+
+  return phone;
 };
 
 
@@ -156,6 +179,7 @@ const getWhatsAppGraphVersion =
 
   return String(
     env?.WHATSAPP_GRAPH_API_VERSION ||
+    env?.WHATSAPP_GRAPH_VERSION ||
     ''
   )
     .trim();
@@ -192,13 +216,15 @@ const ensureWhatsAppSendEnvironment =
 
 
   if (
-    !c.env?.WHATSAPP_GRAPH_API_VERSION
+    !getWhatsAppGraphVersion(
+      c.env
+    )
   ) {
 
     return errorResponse(
       c,
       'WhatsApp configuration missing',
-      'WHATSAPP_GRAPH_API_VERSION is not configured',
+      'WhatsApp Graph API version is not configured',
       500
     );
   }
@@ -834,6 +860,7 @@ async (
     const data =
       await response.text();
 
+
     console.error(
       'Update WhatsApp status error:',
       data
@@ -996,7 +1023,9 @@ app.get(
         c.env?.WHATSAPP_ACCESS_TOKEN &&
         c.env?.WHATSAPP_PHONE_NUMBER_ID &&
         c.env?.WHATSAPP_VERIFY_TOKEN &&
-        c.env?.WHATSAPP_GRAPH_API_VERSION
+        getWhatsAppGraphVersion(
+          c.env
+        )
       );
 
 
@@ -1556,6 +1585,12 @@ app.get(
       err
     ) {
 
+      console.error(
+        'Admin shipping error:',
+        err
+      );
+
+
       return errorResponse(
         c,
         'Failed to load shipping settings',
@@ -1866,9 +1901,6 @@ app.delete(
 
 /* =========================================================
    WHATSAPP WEBHOOK VERIFY
-
-   META akan GET endpoint ini saat pertama kali webhook
-   disambungkan.
    ========================================================= */
 
 app.get(
@@ -1954,11 +1986,6 @@ app.post(
       const payload =
         await c.req.json();
 
-
-      /*
-       * Meta butuh response cepat.
-       * Kita proses payload satu per satu.
-       */
 
       const entries =
         Array.isArray(
@@ -2124,14 +2151,6 @@ app.post(
               );
 
 
-            /*
-             * Insert pesan dulu.
-             *
-             * Karena whatsapp_message_id UNIQUE,
-             * webhook duplicate tidak akan bikin
-             * pesan ganda.
-             */
-
             const savedMessage =
               await saveWhatsAppMessage(
                 c.env,
@@ -2167,13 +2186,6 @@ app.post(
               );
 
 
-            /*
-             * Kalau duplicate webhook,
-             * savedMessage null.
-             *
-             * Jadi unread tidak bertambah dua kali.
-             */
-
             if (
               savedMessage
             ) {
@@ -2199,10 +2211,6 @@ app.post(
       }
 
 
-      /*
-       * Meta cuma butuh HTTP 200.
-       */
-
       return c.json(
         {
           received:
@@ -2221,11 +2229,6 @@ app.post(
         err
       );
 
-
-      /*
-       * Kalau error database,
-       * sementara kita balikin 500 supaya log kelihatan.
-       */
 
       return errorResponse(
         c,
@@ -3016,6 +3019,190 @@ app.post(
   }
 );
 
+
+/* =========================================================
+   ADMIN WHATSAPP - TEST PAYMENT SUCCESS TEMPLATE
+   ========================================================= */
+
+app.post(
+  '/api/admin/whatsapp/test-payment-success',
+  async (c) => {
+
+    const adminError =
+      ensureAdminEnvironment(
+        c
+      );
+
+
+    if (
+      adminError
+    ) {
+
+      return adminError;
+    }
+
+
+    if (
+      !isAdminAuthorized(
+        c
+      )
+    ) {
+
+      return errorResponse(
+        c,
+        'Unauthorized',
+        'Invalid admin secret',
+        401
+      );
+    }
+
+
+    const whatsappError =
+      ensureWhatsAppSendEnvironment(
+        c
+      );
+
+
+    if (
+      whatsappError
+    ) {
+
+      return whatsappError;
+    }
+
+
+    try {
+
+      const body =
+        await c.req
+          .json()
+          .catch(
+            () => ({})
+          );
+
+
+      const phoneNumber =
+        normalizeWhatsAppPhone(
+          body?.phone_number ||
+          body?.phone
+        );
+
+
+      if (
+        !phoneNumber
+      ) {
+
+        return errorResponse(
+          c,
+          'Phone number required',
+          'phone_number is required',
+          400
+        );
+      }
+
+
+      const customerName =
+        String(
+          body?.customer_name ||
+          'Diyan'
+        )
+          .trim();
+
+
+      const orderNumber =
+        String(
+          body?.order_number ||
+          'ARC-TEST-001'
+        )
+          .trim();
+
+
+      const total =
+        Number(
+          body?.total ??
+          45000
+        );
+
+
+      if (
+        !Number.isFinite(
+          total
+        ) ||
+        total <
+        0
+      ) {
+
+        return errorResponse(
+          c,
+          'Invalid total',
+          'total must be a valid number',
+          400
+        );
+      }
+
+
+      const result =
+        await sendOrderPaymentSuccessWhatsApp(
+          c.env,
+          {
+
+            phoneNumber,
+
+            customerName,
+
+            orderNumber,
+
+            total
+
+          }
+        );
+
+
+      if (
+        !result?.success
+      ) {
+
+        return errorResponse(
+          c,
+          'WhatsApp template failed',
+          result?.error ||
+          result?.reason ||
+          'Failed to send WhatsApp template',
+          result?.status ||
+          500
+        );
+      }
+
+
+      return successResponse(
+        c,
+        result,
+        'WhatsApp payment template sent successfully'
+      );
+
+
+    } catch (
+      err
+    ) {
+
+      console.error(
+        'WhatsApp test template error:',
+        err
+      );
+
+
+      return errorResponse(
+        c,
+        'WhatsApp template test failed',
+        err?.message ||
+        'Unexpected error',
+        500
+      );
+    }
+  }
+);
+
+
 /* =========================================================
    AUTH
    ========================================================= */
@@ -3024,6 +3211,7 @@ app.post(
   '/api/auth/welcome-email',
   sendWelcomeEmail
 );
+
 
 /* =========================================================
    PAYMENT ROUTES
@@ -3103,6 +3291,9 @@ app.get(
         whatsapp_webhook:
           '/api/whatsapp/webhook',
 
+        whatsapp_template_test:
+          '/api/admin/whatsapp/test-payment-success',
+
         documentation:
           '/api/health'
 
@@ -3120,7 +3311,9 @@ app.get(
         c.env?.WHATSAPP_ACCESS_TOKEN &&
         c.env?.WHATSAPP_PHONE_NUMBER_ID &&
         c.env?.WHATSAPP_VERIFY_TOKEN &&
-        c.env?.WHATSAPP_GRAPH_API_VERSION
+        getWhatsAppGraphVersion(
+          c.env
+        )
       );
 
 
@@ -3216,6 +3409,13 @@ app.get(
       </p>
 
       <p>
+        Template Test:
+        <code>
+          /api/admin/whatsapp/test-payment-success
+        </code>
+      </p>
+
+      <p>
         Frontend:
         ${frontendUrl}
       </p>
@@ -3235,6 +3435,7 @@ app.get(
     );
   }
 );
+
 
 /* =========================================================
    404
