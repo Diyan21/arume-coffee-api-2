@@ -3,13 +3,18 @@ const normalizePhone =
 
   let phone =
     String(value || '')
-      .replace(/[^0-9]/g, '')
+      .replace(
+        /[^0-9]/g,
+        ''
+      )
       .trim();
 
 
   // 08xxxxxxxxxx -> 628xxxxxxxxxx
   if (
-    phone.startsWith('0')
+    phone.startsWith(
+      '0'
+    )
   ) {
 
     phone =
@@ -25,12 +30,48 @@ const formatRupiahNumber =
 (value) => {
 
   const number =
-    Number(value || 0);
+    Number(
+      value || 0
+    );
 
 
   return new Intl.NumberFormat(
     'id-ID'
-  ).format(number);
+  ).format(
+    number
+  );
+};
+
+
+/* =========================================================
+   GET GRAPH API VERSION
+   ========================================================= */
+
+const getGraphApiVersion =
+(env) => {
+
+  return String(
+    env?.WHATSAPP_GRAPH_API_VERSION ||
+    env?.WHATSAPP_GRAPH_VERSION ||
+    ''
+  ).trim();
+};
+
+
+/* =========================================================
+   CHECK WHATSAPP CONFIG
+   ========================================================= */
+
+const isWhatsAppConfigured =
+(env) => {
+
+  return Boolean(
+    env?.WHATSAPP_ACCESS_TOKEN &&
+    env?.WHATSAPP_PHONE_NUMBER_ID &&
+    getGraphApiVersion(
+      env
+    )
+  );
 };
 
 
@@ -49,184 +90,271 @@ async (
   }
 ) => {
 
-  if (
-    !env?.WHATSAPP_ACCESS_TOKEN ||
-    !env?.WHATSAPP_PHONE_NUMBER_ID ||
-    !env?.WHATSAPP_GRAPH_API_VERSION
-  ) {
+  try {
 
-    console.warn(
-      'WhatsApp environment is incomplete'
-    );
+    if (
+      !isWhatsAppConfigured(
+        env
+      )
+    ) {
 
-    return {
-      success:
-        false,
-
-      skipped:
-        true,
-
-      reason:
-        'WhatsApp configuration missing'
-    };
-  }
+      console.warn(
+        'WhatsApp environment is incomplete'
+      );
 
 
-  const phone =
-    normalizePhone(
-      phoneNumber
-    );
+      return {
+        success:
+          false,
 
+        skipped:
+          true,
 
-  if (
-    !phone
-  ) {
-
-    return {
-      success:
-        false,
-
-      skipped:
-        true,
-
-      reason:
-        'Customer phone number missing'
-    };
-  }
-
-
-  const graphVersion =
-    String(
-      env.WHATSAPP_GRAPH_API_VERSION
-    ).trim();
-
-
-  const phoneNumberId =
-    String(
-      env.WHATSAPP_PHONE_NUMBER_ID
-    ).trim();
-
-
-  const endpoint =
-    `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;
-
-
-  const payload = {
-
-    messaging_product:
-      'whatsapp',
-
-    recipient_type:
-      'individual',
-
-    to:
-      phone,
-
-    type:
-      'template',
-
-    template: {
-
-      name:
-        'order_payment_success',
-
-      language: {
-
-        code:
-          'id'
-
-      },
-
-      components: [
-
-        {
-
-          type:
-            'body',
-
-          parameters: [
-
-            {
-              type:
-                'text',
-
-              text:
-                String(
-                  customerName ||
-                  'Kak'
-                )
-            },
-
-            {
-              type:
-                'text',
-
-              text:
-                String(
-                  orderNumber ||
-                  '-'
-                )
-            },
-
-            {
-              type:
-                'text',
-
-              text:
-                formatRupiahNumber(
-                  total
-                )
-            }
-
-          ]
-
-        }
-
-      ]
-
+        reason:
+          'WhatsApp configuration missing'
+      };
     }
 
-  };
+
+    const phone =
+      normalizePhone(
+        phoneNumber
+      );
 
 
-  const response =
-    await fetch(
-      endpoint,
-      {
+    if (
+      !phone
+    ) {
 
-        method:
-          'POST',
+      return {
+        success:
+          false,
 
-        headers: {
+        skipped:
+          true,
 
-          Authorization:
-            `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+        reason:
+          'Customer phone number missing'
+      };
+    }
 
-          'Content-Type':
-            'application/json'
+
+    const graphVersion =
+      getGraphApiVersion(
+        env
+      );
+
+
+    const phoneNumberId =
+      String(
+        env.WHATSAPP_PHONE_NUMBER_ID
+      ).trim();
+
+
+    const endpoint =
+      `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`;
+
+
+    const payload = {
+
+      messaging_product:
+        'whatsapp',
+
+      recipient_type:
+        'individual',
+
+      to:
+        phone,
+
+      type:
+        'template',
+
+      template: {
+
+        name:
+          'order_payment_success',
+
+        language: {
+
+          code:
+            'id'
 
         },
 
-        body:
-          JSON.stringify(
-            payload
-          )
+        components: [
 
+          {
+
+            type:
+              'body',
+
+            parameters: [
+
+              {
+                type:
+                  'text',
+
+                text:
+                  String(
+                    customerName ||
+                    'Kak'
+                  )
+              },
+
+              {
+                type:
+                  'text',
+
+                text:
+                  String(
+                    orderNumber ||
+                    '-'
+                  )
+              },
+
+              {
+                type:
+                  'text',
+
+                text:
+                  formatRupiahNumber(
+                    total
+                  )
+              }
+
+            ]
+
+          }
+
+        ]
+
+      }
+
+    };
+
+
+    const response =
+      await fetch(
+        endpoint,
+        {
+
+          method:
+            'POST',
+
+          headers: {
+
+            Authorization:
+              `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+
+            'Content-Type':
+              'application/json'
+
+          },
+
+          body:
+            JSON.stringify(
+              payload
+            )
+
+        }
+      );
+
+
+    const data =
+      await response
+        .json()
+        .catch(
+          () => ({})
+        );
+
+
+    if (
+      !response.ok
+    ) {
+
+      console.error(
+        'WhatsApp template send error:',
+        {
+          status:
+            response.status,
+
+          error:
+            data?.error?.message ||
+            null,
+
+          code:
+            data?.error?.code ||
+            null,
+
+          subcode:
+            data?.error?.error_subcode ||
+            null
+        }
+      );
+
+
+      return {
+
+        success:
+          false,
+
+        status:
+          response.status,
+
+        error:
+          data?.error?.message ||
+          'Failed to send WhatsApp template',
+
+        meta:
+          data
+
+      };
+    }
+
+
+    const messageId =
+      data?.messages?.[0]?.id ||
+      null;
+
+
+    const messageStatus =
+      data?.messages?.[0]?.message_status ||
+      null;
+
+
+    console.log(
+      'WhatsApp template sent:',
+      {
+        messageId,
+        messageStatus,
+        phone
       }
     );
 
 
-  const data =
-    await response.json();
+    return {
 
+      success:
+        true,
 
-  if (
-    !response.ok
+      whatsapp_message_id:
+        messageId,
+
+      message_status:
+        messageStatus,
+
+      phone_number:
+        phone
+
+    };
+
+  } catch (
+    err
   ) {
 
     console.error(
-      'WhatsApp template send error:',
-      data
+      'WhatsApp send exception:',
+      err
     );
 
 
@@ -236,30 +364,12 @@ async (
         false,
 
       status:
-        response.status,
+        500,
 
       error:
-        data?.error?.message ||
-        'Failed to send WhatsApp template',
-
-      meta:
-        data
+        err?.message ||
+        'Unexpected WhatsApp send error'
 
     };
   }
-
-
-  return {
-
-    success:
-      true,
-
-    whatsapp_message_id:
-      data?.messages?.[0]?.id ||
-      null,
-
-    phone_number:
-      phone
-
-  };
 };
