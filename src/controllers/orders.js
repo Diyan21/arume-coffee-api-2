@@ -41,20 +41,11 @@ const STORE_LOCATION = {
    ========================================================= */
 
 const PRODUCT_ID_ALIASES = {
-  'arumeya-aren-latte':
-    'prod-01',
-
-  'arumeya-butterscotch':
-    'prod-02',
-
-  'arumeya-hazelnut-latte':
-    'prod-03',
-
-  'arumeya-banana-latte':
-    'prod-04',
-
-  'arumeya-americano':
-    'prod-05'
+  'arumeya-aren-latte': 'prod-01',
+  'arumeya-butterscotch': 'prod-02',
+  'arumeya-hazelnut-latte': 'prod-03',
+  'arumeya-banana-latte': 'prod-04',
+  'arumeya-americano': 'prod-05'
 };
 
 
@@ -62,21 +53,15 @@ const PRODUCT_ID_ALIASES = {
    NORMALIZE PRODUCT ID
    ========================================================= */
 
-const normalizeProductId =
-(id) => {
-
-  const rawId =
-    String(
-      id || ''
-    );
-
-
-  return (
-    PRODUCT_ID_ALIASES[
-      rawId
-    ] ||
-    rawId
-  );
+const normalizeProductId = (id) => {
+  const rawId = String(id || '').trim();
+  
+  // Jika ID sudah berformat prod-XX, langsung kembalikan rawId
+  if (PRODUCT_ID_ALIASES[rawId]) {
+    return PRODUCT_ID_ALIASES[rawId];
+  }
+  
+  return rawId;
 };
 
 
