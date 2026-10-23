@@ -1113,7 +1113,11 @@ async (c) => {
 
         quantity,
 
-        subtotal
+        subtotal,
+
+        notes:
+          item.notes ||
+          null
       });
     }
 
@@ -1496,7 +1500,11 @@ async (c) => {
             item.quantity,
 
           subtotal:
-            item.subtotal
+            item.subtotal,
+
+          notes:
+            item.notes ||
+            null
         })
       );
 
@@ -2305,7 +2313,8 @@ async (c) => {
             product_name,
             price,
             quantity,
-            subtotal
+            subtotal,
+            notes
           `)
           .in(
             'order_number',
@@ -2573,11 +2582,6 @@ async (c) => {
         .toLowerCase();
 
 
-    /*
-     * Kalau status sama, langsung sukses.
-     * Biar aman terhadap double click / polling.
-     */
-
     if (
       currentStatus ===
       status
@@ -2604,11 +2608,6 @@ async (c) => {
     }
 
 
-    /*
-     * Pending / failed tidak boleh langsung
-     * menjadi ready / completed.
-     */
-
     if (
       (
         status ===
@@ -2633,10 +2632,6 @@ async (c) => {
     }
 
 
-    /*
-     * Completed order jangan diubah balik.
-     */
-
     if (
       currentStatus ===
       'completed'
@@ -2650,10 +2645,6 @@ async (c) => {
       );
     }
 
-
-    /*
-     * Refunded order juga final.
-     */
 
     if (
       currentStatus ===
@@ -2898,11 +2889,6 @@ async (c) => {
         .toLowerCase();
 
 
-    /*
-     * Hanya order belum bayar / gagal
-     * yang boleh dihapus.
-     */
-
     if (
       currentStatus !==
         'pending' &&
@@ -2919,12 +2905,6 @@ async (c) => {
     }
 
 
-    /*
-     * Proteksi tambahan.
-     * Walaupun status pending/failed,
-     * kalau pernah tercatat paid_at jangan hapus.
-     */
-
     if (
       order.paid_at
     ) {
@@ -2937,16 +2917,6 @@ async (c) => {
       );
     }
 
-
-    /*
-     * Kalau stok pernah berkurang,
-     * jangan izinkan hard delete.
-     */
-
-
-    /*
-     * 1. Delete payment records.
-     */
 
     const {
       error:
@@ -2976,10 +2946,6 @@ async (c) => {
     }
 
 
-    /*
-     * 2. Delete order items.
-     */
-
     const {
       error:
         itemsDeleteError
@@ -3007,10 +2973,6 @@ async (c) => {
       );
     }
 
-
-    /*
-     * 3. Delete main order.
-     */
 
     const {
       data:
@@ -3068,10 +3030,6 @@ async (c) => {
       );
     }
 
-
-    /*
-     * Remove memory cache.
-     */
 
     inMemoryOrdersMap.delete(
       orderNumber
@@ -3308,11 +3266,6 @@ async (
   }
 
 
-  /*
-   * Mencegah stok berkurang dua kali
-   * kalau webhook Xendit masuk ulang.
-   */
-
   if (
     mode ===
       'decrease' &&
@@ -3331,11 +3284,6 @@ async (
     };
   }
 
-
-  /*
-   * Mencegah refund mengembalikan
-   * stok dua kali.
-   */
 
   if (
     mode ===
